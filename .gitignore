@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+RNN_cache/
+*_transition_probabilities.json
+behavioral_neural_state_table.json
