@@ -391,7 +391,7 @@ def l1_distance(state1, state2):
     keys = set(state1) | set(state2)
     return sum(abs(state1.get(k, 0) - state2.get(k, 0)) for k in keys)
 
-def dynamic_degeneracy_score(pair_transition_dict, num_steps=2):
+def dynamic_degeneracy_score(pair_transition_dict, num_steps=2, gen_JSON = False):
     freq_pair = convert_count_to_probability(pair_transition_dict)
     b_to_n = build_b_to_n_map(pair_transition_dict)
     n_to_b = build_n_to_b_map(pair_transition_dict)
@@ -399,11 +399,15 @@ def dynamic_degeneracy_score(pair_transition_dict, num_steps=2):
     scores_b_to_n = []
     scores_n_to_b = []
 
+    out_b_to_n = {}
+    out_n_to_b = {}
+
     for b, n_set in b_to_n.items():
         if len(n_set) < 2:
             continue
 
         n_list = list(n_set)
+        b_to_n_comparisons = []
 
         for i in range(len(n_list)):
             for j in range(i + 1, len(n_list)):
@@ -421,11 +425,25 @@ def dynamic_degeneracy_score(pair_transition_dict, num_steps=2):
                 score = l1_distance(dist1, dist2)
                 scores_b_to_n.append(score)
 
+                
+                b_to_n_comparisons.append({
+                    "state_1": str(state1),
+                    "state_2": str(state2),
+                    "l1_distance": float(score),
+                    "dist_1": {str(k): float(v) for k, v in dist1.items()},
+                    "dist_2": {str(k): float(v) for k, v in dist2.items()},
+                })
+
+            if gen_JSON and b_to_n_comparisons:
+                out_b_to_n[str(b)] = b_to_n_comparisons
+                return out_b_to_n
+
     for n, b_set in n_to_b.items():
         if len(b_set) < 2:
             continue
 
         b_list = list(b_set)
+        n_to_b_comparisons = []
 
         for i in range(len(b_list)):
             for j in range(i + 1, len(b_list)):
@@ -443,46 +461,19 @@ def dynamic_degeneracy_score(pair_transition_dict, num_steps=2):
                 score_n_to_b = l1_distance(dist1, dist2)
                 scores_n_to_b.append(score_n_to_b)
 
-    return scores_b_to_n, scores_n_to_b
-
-def dynamic_degeneracy_json(pair_transition_dict, num_steps=5):
-    freq_pair = convert_count_to_probability(pair_transition_dict)
-    b_to_n = build_b_to_n_map(pair_transition_dict)
-
-    out = {}
-
-    for b, n_set in b_to_n.items():
-        if len(n_set) < 2:
-            continue
-
-        n_list = list(n_set)
-        comparisons = []
-
-        for i in range(len(n_list)):
-            for j in range(i + 1, len(n_list)):
-                n1, n2 = n_list[i], n_list[j]
-                state1 = (b, n1)
-                state2 = (b, n2)
-
-                if state1 not in freq_pair or state2 not in freq_pair:
-                    continue
-
-                dist1 = n_step_from_start(state1, freq_pair, num_steps=num_steps)
-                dist2 = n_step_from_start(state2, freq_pair, num_steps=num_steps)
-                score = l1_distance(dist1, dist2)
-
-                comparisons.append({
+                n_to_b_comparisons.append({
                     "state_1": str(state1),
                     "state_2": str(state2),
                     "l1_distance": float(score),
                     "dist_1": {str(k): float(v) for k, v in dist1.items()},
                     "dist_2": {str(k): float(v) for k, v in dist2.items()},
                 })
+        
+        if gen_JSON and n_to_b_comparisons:
+            out_n_to_b[str(n)] = n_to_b_comparisons
+            return out_n_to_b
 
-        if comparisons:
-            out[str(b)] = comparisons
-
-    return out
+    return scores_b_to_n, scores_n_to_b
 
 
 
@@ -519,7 +510,7 @@ if __name__ == "__main__":
         json.dump(n_step_out_ready, f, indent=2)'''
 
     test_deg = test_degeneracy(pair_transition_dict)
-    dynamic_json = dynamic_degeneracy_json(pair_transition_dict, num_steps=2)
+    dynamic_json = dynamic_degeneracy_json(pair_transition_dict, num_steps=2, gen_JSON=True)
 
     dynamic_json_path = os.path.join(SCRIPT_DIR, "dynamic_degeneracy_5_step.json")
     with open(dynamic_json_path, "w") as f:
