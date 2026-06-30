@@ -5,3 +5,6 @@ __pycache__/
 RNN_cache/
 *_transition_probabilities.json
 behavioral_neural_state_table.json
+17x17_arena_data/
+*.mp4
+behavioral_transition_probability.json

@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from collections import defaultdict
 
-def image_preproccesing(file_path = os.path.expanduser("~/Desktop/unity/RNN_images/image_data.csv")): 
+def image_preproccesing(file_path = os.path.expanduser("~/Desktop/unity/10x10/metadata.csv")): 
     """preprocess the csv file to create tuple of 
     (x,y,heading) behavioral states, associated image, isValid, and visit_count that can be unpacked in initial training"""
     if not os.path.exists(file_path):
@@ -12,12 +12,16 @@ def image_preproccesing(file_path = os.path.expanduser("~/Desktop/unity/RNN_imag
     #print(df.columns)
     b_state_image_path_dict = defaultdict(list)
     all_visit_counts_dict = defaultdict(int)
+
+    image_dir = os.path.dirname(file_path)
     for row in df.itertuples(index=False):
-        b_state = (row.x, row.y, row.heading)
-        b_state_image_path_dict[b_state].append(row.image_path)
+        b_state = (int(row.x + 4.5), int(row.z + 4.5), int(row.rotation_index))
+
+        img_path = os.path.join(image_dir, row.filename)
+        b_state_image_path_dict[b_state].append(img_path)
 
         if b_state not in all_visit_counts_dict:
-            all_visit_counts_dict[b_state] = row.visit_count
+            all_visit_counts_dict[b_state] = 0
     
     return b_state_image_path_dict, all_visit_counts_dict
 
