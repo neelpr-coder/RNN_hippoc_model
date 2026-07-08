@@ -8,3 +8,4 @@ behavioral_neural_state_table.json
 17x17_arena_data/
 *.mp4
 behavioral_transition_probability.json
+route_sequence_min100.npy

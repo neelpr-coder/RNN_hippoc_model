@@ -831,7 +831,7 @@ def n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce=
     plt.tight_layout()
     plt.show()
 
-def n_state_distribution_histograms(bin_size=100):
+def n_state_distribution_histograms_individual(bin_size=100):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -894,7 +894,12 @@ def n_state_distribution_histograms(bin_size=100):
         plt.tight_layout(rect=[0, 0, 1, 0.92])
         plt.show()
 
-def n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True):
+def n_state_histogram_overlay_binned(
+    bin_size=100,
+    reduce_to_same_bins=True,
+    max_display_bin=1000,
+    log_y=True
+):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -905,31 +910,32 @@ def n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True):
 
     min_attempt_values = sorted(sweep_results.keys())
 
-    # First collect all visit counts so every sweep uses the same bin edges
+    # Collect all visit counts for each sweep
     all_counts_by_min = {}
-
     for min_attempts in min_attempt_values:
         n_state_dict = sweep_results[min_attempts]["all_visit_count_n_dict"]
-        visit_counts = list(n_state_dict.values())
-        all_counts_by_min[min_attempts] = visit_counts
+        all_counts_by_min[min_attempts] = list(n_state_dict.values())
 
-    global_max_count = max(
-        max(counts)
-        for counts in all_counts_by_min.values()
-    )
+    # If max_display_bin is not provided, use rounded global max
+    if max_display_bin is None:
+        global_max_count = max(max(counts) for counts in all_counts_by_min.values())
+        max_display_bin = math.ceil(global_max_count / bin_size) * bin_size
 
-    upper = math.ceil(global_max_count / bin_size) * bin_size
-    bins = list(range(0, upper + bin_size, bin_size))
+    # Build fixed bins up to max_display_bin
+    bins = list(range(0, max_display_bin + bin_size, bin_size))
 
+    # Labels for regular bins
     bin_labels = []
     for i in range(len(bins) - 1):
         start = bins[i]
         end = bins[i + 1]
-
         if start == 0:
             bin_labels.append(f"{start}-{end}")
         else:
             bin_labels.append(f"{start + 1}-{end}")
+
+    # Add one overflow bin label
+    bin_labels.append(f">{max_display_bin}")
 
     base_positions = np.arange(len(bin_labels))
 
@@ -942,9 +948,16 @@ def n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True):
     plt.figure(figsize=(14, 7))
 
     for sweep_idx, (color, min_attempts) in enumerate(zip(colors, min_attempt_values)):
-        visit_counts = all_counts_by_min[min_attempts]
+        visit_counts = np.array(all_counts_by_min[min_attempts])
 
+        # Histogram counts for regular bins
         hist_counts, _ = np.histogram(visit_counts, bins=bins)
+
+        # Overflow bin: counts greater than max_display_bin
+        overflow_count = np.sum(visit_counts > max_display_bin)
+
+        # Append overflow bin
+        hist_counts = np.append(hist_counts, overflow_count)
 
         offset = (sweep_idx - num_sweeps / 2) * bar_width + bar_width / 2
         x_positions = base_positions + offset
@@ -961,7 +974,7 @@ def n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True):
 
     plt.title(
         f"Neural State Visit Count Distribution Across min_attempts\n"
-        f"Visit-count bin size = {bin_size}"
+        f"Visit-count bin size = {bin_size}, tail grouped as >{max_display_bin}"
     )
     plt.xlabel("Visit-count bin")
     plt.ylabel("Number of neural states")
@@ -974,7 +987,10 @@ def n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True):
     )
 
     plt.grid(axis="y", alpha=0.5)
-    plt.yscale("log")
+
+    if log_y:
+        plt.yscale("log")
+
     plt.legend(
         title="min_attempts",
         fontsize=8,
@@ -1126,7 +1142,7 @@ def normalize_grid(grid):
 def joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union"):
     """Generate a heatmap showing the joint distribution of neural and behavioral states. Generate from the overlay
     of the two heatmaps."""
-    b_grid, b_x_vals, b_y_vals = b_state_distribution_heatmap(all_visit_count_b_dict, agg="mean", show=False)
+    b_grid, b_x_vals, b_y_vals = b_state_distribution_heatmap(all_visit_count_b_dict_100, agg="mean", show=False)
     n_grid, n_x_vals, n_y_vals = n_state_distribution_heatmap(b_to_n_dict, agg="union", show=False)
     
     if b_x_vals != n_x_vals or b_y_vals != n_y_vals:
@@ -1159,6 +1175,86 @@ def joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union"):
     plt.show()
 
     return joint_grid
+
+def paired_transition_density_heatmap(
+    pair_transition_dict,
+    grid_size=10,
+    mode="count",
+    title="Paired transition density by position",
+    cmap="viridis"
+):
+    """
+    Creates a heatmap showing paired-transition density at each behavioral position.
+    
+    "count" = total outgoing transition counts from each (x, y)
+    "unique_edges" = number of unique outgoing paired transitions from each (x, y)
+    "unique_pair_states" = number of unique current (B, N) pair states at each (x, y)
+    """
+
+    heatmap = np.zeros((grid_size, grid_size), dtype=float)
+
+    seen_pair_states_by_pos = {}
+
+    for current_pair, next_dict in pair_transition_dict.items():
+        B0, N0 = current_pair
+        x, y, heading = B0
+
+        if not (0 <= x < grid_size and 0 <= y < grid_size):
+            continue
+
+        if mode == "count":
+            value = sum(next_dict.values())
+
+        elif mode == "unique_edges":
+            value = len(next_dict)
+
+        elif mode == "unique_pair_states":
+            seen_pair_states_by_pos.setdefault((x, y), set()).add(current_pair)
+            continue
+
+        else:
+            raise ValueError("mode must be 'count', 'unique_edges', or 'unique_pair_states'")
+
+        # heatmap indexed as [row=y, col=x]
+        heatmap[y, x] += value
+
+    if mode == "unique_pair_states":
+        for (x, y), pair_states in seen_pair_states_by_pos.items():
+            heatmap[y, x] = len(pair_states)
+
+
+    plt.figure(figsize=(7, 6))
+
+    im = plt.imshow(
+        heatmap,
+        origin="lower",
+        cmap=cmap,
+        aspect="equal"
+    )
+
+    plt.title(title)
+    plt.xlabel("x position")
+    plt.ylabel("y position")
+
+    plt.xticks(range(grid_size))
+    plt.yticks(range(grid_size))
+
+    cbar = plt.colorbar(im)
+
+    if mode == "count":
+        label = "Total paired transition count"
+    elif mode == "unique_edges":
+        label = "Number of unique outgoing paired transitions"
+    else:
+        label = "Number of unique current paired states"
+
+
+    cbar.set_label(label)
+
+    plt.tight_layout()
+    plt.show()
+
+    return heatmap
 
 def make_n_state_labels(neural_state_dict):
     all_n_states = set()
@@ -1255,13 +1351,6 @@ def compute_top3_route_choice_error(
     top_k=3
 ):
     """
-    Computes your new error:
-
-        p_route = P(B1|B0) * P(N1|N0), only if B1 and N1 are both in top-k.
-                  Otherwise p_route = 0.
-
-        p_best = top1 P(B_next|B0) * top1 P(N_next|N0)
-
         raw_error = p_best - p_route
 
         C = total available nonzero transition options
@@ -1274,23 +1363,39 @@ def compute_top3_route_choice_error(
     n_next_dict = neural_state_dict.get(N0, {})
     pair_next_dict = pair_transition_dict.get((B0, N0), {})
 
-    # Route probabilities under Version A
-    p_b_route, b_route_count, b_total, b_in_top3, b_rank_top3 = route_prob_if_in_top3(
-        b_next_dict,
-        B1,
-        top_k=top_k
-    )
+    if top_k is None:
+    # No top-k filtering. Use the actual route transition probabilities directly.
+        p_b_route, b_route_count, b_total = transition_prob_from_counts(
+            b_next_dict,
+            B1
+        )
 
-    p_n_route, n_route_count, n_total, n_in_top3, n_rank_top3 = route_prob_if_in_top3(
-        n_next_dict,
-        N1,
-        top_k=top_k
-    )
+        p_n_route, n_route_count, n_total = transition_prob_from_counts(
+            n_next_dict,
+            N1
+        )
 
-    if b_in_top3 and n_in_top3:
         p_route = p_b_route * p_n_route
+
+        b_in_top3 = None
+        n_in_top3 = None
+        b_rank_top3 = None
+        n_rank_top3 = None
+
     else:
-        p_route = 0.0
+        # Existing top-k filtering logic
+        p_b_route, b_route_count, b_total, b_in_top3, b_rank_top3 = route_prob_if_in_top3(
+            b_next_dict, B1, top_k=top_k
+        )
+
+        p_n_route, n_route_count, n_total, n_in_top3, n_rank_top3 = route_prob_if_in_top3(
+            n_next_dict, N1, top_k=top_k
+        )
+
+        if b_in_top3 and n_in_top3:
+            p_route = p_b_route * p_n_route
+        else:
+            p_route = 0.0
 
     # Best independent transition
     p_b_best, b_best_state, b_best_count, _ = top_choice_prob(b_next_dict)
@@ -1310,11 +1415,19 @@ def compute_top3_route_choice_error(
     raw_error = p_best - p_route
     normalized_error = raw_error / C if C > 0 else 0.0
 
+    actual_lookup_error = actual_pair_prob - p_best
+    normalized_actual_lookup_error = actual_lookup_error / C if C > 0 else 0.0
+
     return {
         "p_route": p_route,
         "p_best": p_best,
         "raw_error": raw_error,
         "normalized_error": normalized_error,
+        
+        "actual_pair_prob": actual_pair_prob,
+        "actual_lookup_error": actual_lookup_error,
+        "normalized_actual_lookup_error": normalized_actual_lookup_error,
+
         "C": C,
 
         "p_b_route": p_b_route,
@@ -1359,9 +1472,9 @@ def generate_supported_observed_pair_route(
     b_transition_dict,
     route_len=50,
     seed=42,
-    min_pair_total=3,
+    min_pair_total=10,
     min_pair_count=1,
-    min_n_total=3,
+    min_n_total=10,
     min_b_total=20,
     max_tries=1000
 ):
@@ -1481,13 +1594,13 @@ def animate_json_lookup_transition_clean(
 
     error_history = []
 
-    fig = plt.figure(figsize=(15.5, 9.8))
+    fig = plt.figure(figsize=(15.5, 10.0))
 
     gs = gridspec.GridSpec(
         4,
         2,
-        height_ratios=[0.60, 1.45, 1.65, 1.15],  # made row 3 taller for Box 3/4
-        hspace=0.36,
+        height_ratios=[0.60, 1.45, 1.65, 1.35],  # made row 3 taller for Box 3/4
+        hspace=0.38,
         wspace=0.22
     )
 
@@ -1617,6 +1730,7 @@ def animate_json_lookup_transition_clean(
         C = error_info["C"]
 
         actual_prob = error_info["actual_pair_prob"]
+        actual_lookup_error = error_info["actual_lookup_error"]
 
         b_count = error_info["b_route_count"]
         n_count = error_info["n_route_count"]
@@ -1743,6 +1857,7 @@ def animate_json_lookup_transition_clean(
                      ha="left", va="top", fontsize=15, fontweight="bold")
 
         calc_lines = [
+            "                      ",
             "Route-choice estimate:",
             "",
             "Use P(B₁|B₀) × P(N₁|N₀)",
@@ -1752,14 +1867,16 @@ def animate_json_lookup_transition_clean(
             f"N transition in top 3: {n_in_top3}",
             "",
             f"P_route = {p_b:.6f} × {p_n:.6f} = {route_independent_prob:.6f}"
-            ""
         ]
 
         calc_ax.text(
-            0.03, 0.82,
+            0.03,
+            0.86,
             "\n".join(calc_lines),
-            ha="left", va="top",
-            fontsize=12.2, linespacing=1.22
+            ha="left",
+            va="top",
+            fontsize=11.4,
+            linespacing=1.12
         )
 
         # ---------------- 4. ACTUAL PAIR LOOKUP ----------------
@@ -1791,33 +1908,33 @@ def animate_json_lookup_transition_clean(
         )
 
         # ---------------- SUMMARY ----------------
-        summary_ax.text(0.03, 0.92, "Comparison",
-                ha="left", va="top", fontsize=15, fontweight="bold")
-
         summary_ax.text(
-            0.03, 0.68,
-            f"Best independent transition: {best_independent_prob:.6f}",
-            ha="left", va="center", fontsize=13.2
+            0.03,
+            0.90,
+            "Comparison",
+            ha="left",
+            va="top",
+            fontsize=15,
+            fontweight="bold"
         )
 
-        summary_ax.text(
-            0.03, 0.50,
+        summary_lines = [
+            f"Best independent transition:  {best_independent_prob:.6f}",
             f"Route independent transition: {route_independent_prob:.6f}",
-            ha="left", va="center", fontsize=13.2
-        )
+            f"Actual paired lookup:         {actual_prob:.6f}",
+            f"Route-choice error = best - route:   {raw_error:.6f}",
+            f"Actual lookup error = actual - best: {actual_lookup_error:.6f}"
+        ]
 
         summary_ax.text(
-            0.03, 0.32,
-            f"Raw error = best - route = {raw_error:.6f}",
-            ha="left", va="center", fontsize=13.2,
-            color="#b22222" if raw_error >= 0 else "#1b7f3a"
-        )
-
-        summary_ax.text(
-            0.03, 0.14,
-            f"Normalized error = raw / C = {normalized_error:.8f}   (C={C})",
-            ha="left", va="center", fontsize=12.5,
-            color="#b22222" if normalized_error >= 0 else "#1b7f3a"
+            0.03,
+            0.70,
+            "\n".join(summary_lines),
+            ha="left",
+            va="top",
+            fontsize=10.8,
+            family="monospace",
+            linespacing=1.55
         )
 
         # ---------------- ROUTE PANEL ----------------
@@ -1933,7 +2050,7 @@ def animate_json_lookup_transition_clean(
     return anim, route_sequence, error_history
 
 
-def evaluate_error_history_on_fixed_route(route_sequence, b_transition_dict, neural_state_dict, pair_transition_dict, top_k=3):
+def evaluate_error_history_on_fixed_route(route_sequence, b_transition_dict, neural_state_dict, pair_transition_dict, top_k=3, apply_top3_filter=False):
     """
     Evaluates route-choice error over a fixed paired route.
 
@@ -1947,16 +2064,28 @@ def evaluate_error_history_on_fixed_route(route_sequence, b_transition_dict, neu
     error_history = []
 
     for frame_idx, (B0, N0, B1, N1, observed_count) in enumerate(route_sequence):
-        error_info = compute_top3_route_choice_error(
-            b_transition_dict,
-            neural_state_dict,
-            pair_transition_dict,
-            B0,
-            N0,
-            B1,
-            N1,
-            top_k=top_k
-        )
+        if apply_top3_filter:
+            error_info = compute_top3_route_choice_error(
+                b_transition_dict,
+                neural_state_dict,
+                pair_transition_dict,
+                B0,
+                N0,
+                B1,
+                N1,
+                top_k=top_k
+            )
+        else:
+            error_info = compute_top3_route_choice_error(
+                b_transition_dict,
+                neural_state_dict,
+                pair_transition_dict,
+                B0,
+                N0,
+                B1,
+                N1,
+                top_k=None
+            )
 
         error_history.append({
             "frame": frame_idx + 1,
@@ -1968,6 +2097,8 @@ def evaluate_error_history_on_fixed_route(route_sequence, b_transition_dict, neu
 
             "raw_error": error_info["raw_error"],
             "normalized_error": error_info["normalized_error"],
+            "actual_lookup_error": error_info["actual_lookup_error"],
+            "normalized_actual_lookup_error": error_info["normalized_actual_lookup_error"],
             "C": error_info["C"],
 
             "p_route": error_info["p_route"],
@@ -2064,26 +2195,104 @@ def plot_error_histories_over_time(error_history_50, error_history_100, title="R
     print("Max:", np.max(errors_100))
     print("Min:", np.min(errors_100))
 
+
+
+
+def summarize_fixed_route_coverage(
+    route_sequence,
+    b_transition_dict,
+    neural_state_dict,
+    pair_transition_dict,
+    label="sweep"
+):
+    missing_B0 = 0
+    missing_N0 = 0
+    missing_pair0 = 0
+
+    observed_B_transition_missing = 0
+    observed_N_transition_missing = 0
+    observed_pair_transition_missing = 0
+
+    for B0, N0, B1, N1, _ in route_sequence:
+        b_next = b_transition_dict.get(B0, {})
+        n_next = neural_state_dict.get(N0, {})
+        pair_next = pair_transition_dict.get((B0, N0), {})
+
+        if len(b_next) == 0:
+            missing_B0 += 1
+        if len(n_next) == 0:
+            missing_N0 += 1
+        if len(pair_next) == 0:
+            missing_pair0 += 1
+
+        if B1 not in b_next:
+            observed_B_transition_missing += 1
+        if N1 not in n_next:
+            observed_N_transition_missing += 1
+        if (B1, N1) not in pair_next:
+            observed_pair_transition_missing += 1
+
+    total = len(route_sequence)
+
+    print(f"\nCoverage summary for {label}")
+    print("-" * 40)
+    print(f"Total route transitions: {total}")
+    print(f"Missing B0 states: {missing_B0}/{total}")
+    print(f"Missing N0 states: {missing_N0}/{total}")
+    print(f"Missing pair0 states: {missing_pair0}/{total}")
+    print(f"Observed B transition missing: {observed_B_transition_missing}/{total}")
+    print(f"Observed N transition missing: {observed_N_transition_missing}/{total}")
+    print(f"Observed pair transition missing: {observed_pair_transition_missing}/{total}")
+
+def summarize_error_history(error_history, label="sweep"):
+    import numpy as np
+
+    raw_errors = np.array([e["raw_error"] for e in error_history])
+    norm_errors = np.array([e["normalized_error"] for e in error_history])
+
+    b_top3 = np.array([e["b_in_top3"] for e in error_history])
+    n_top3 = np.array([e["n_in_top3"] for e in error_history])
+
+    both_top3 = b_top3 & n_top3
+
+    print(f"\nError summary for {label}")
+    print("-" * 40)
+    print("Mean raw error:", raw_errors.mean())
+    print("Median raw error:", np.median(raw_errors))
+    print("Max raw error:", raw_errors.max())
+
+    print("Mean normalized error:", norm_errors.mean())
+    print("Median normalized error:", np.median(norm_errors))
+    print("Max normalized error:", norm_errors.max())
+
+    print("B route transition in top 3:", b_top3.sum(), "/", len(b_top3))
+    print("N route transition in top 3:", n_top3.sum(), "/", len(n_top3))
+    print("Both B and N in top 3:", both_top3.sum(), "/", len(both_top3))
+
+
 if __name__ == "__main__":
     model = small_model.RNN().to(device)
     num_steps = 2
-
+    print(bin_size)
     
-    #n_state_histogram = n_state_distribution_histograms()
-    #binned_overlay = n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True)
-    #n_state_barplots = top_k_n_state_distribution_barplots(top_k=100) # individual plots for each min_attempts value
+    #n_state_histogram = n_state_distribution_histograms_individual()
+    #binned_overlay = n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True, max_display_bin=1500)
     #summary = n_state_distribution_summary()
     #b_state_bar_graphs = b_state_distribution_barplots()
-    print(bin_size)
 
-    sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
+    #sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
     #print(sweep_results.keys())
     
-
+    '''heatmap_pair_unique_edges_100 = paired_transition_density_heatmap(
+        pair_transition_dict_100,
+        grid_size=10,
+        mode="unique_edges",
+        title="Unique Paired Transition Density by Position, min_attempts=100"
+    )'''
     pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, all_visit_count_b_dict_100, all_visit_count_n_dict_100 = generate_dicts(model)
-    pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
+    #pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
 
-    shared_route_sequence = generate_supported_observed_pair_route(
+    '''shared_route_sequence = generate_supported_observed_pair_route(
         pair_transition_dict_100,
         neural_state_dict_100,
         behavioral_transition_dict_100,
@@ -2096,11 +2305,12 @@ if __name__ == "__main__":
     )
 
     error_history_50 = evaluate_error_history_on_fixed_route(
-    shared_route_sequence,
-    behavioral_transition_dict_50,
-    neural_state_dict_50,
-    pair_transition_dict_50,
-    top_k=3
+        shared_route_sequence,
+        behavioral_transition_dict_50,
+        neural_state_dict_50,
+        pair_transition_dict_50,
+        top_k=3,
+        apply_top3_filter=False
     )
 
     error_history_100 = evaluate_error_history_on_fixed_route(
@@ -2108,37 +2318,42 @@ if __name__ == "__main__":
         behavioral_transition_dict_100,
         neural_state_dict_100,
         pair_transition_dict_100,
-        top_k=3
+        top_k=3,
+        apply_top3_filter=False
+    )'''
+
+    _, route100, error_history_100 = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_animation_min100.mp4")
+    np.save(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), np.array(route100, dtype=object), allow_pickle=True)
+
+    #error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Raw Error Plot Over Same Route: min50 vs min100", use_normalized=False, show_points=True)
+
+    '''summarize_fixed_route_coverage(
+        shared_route_sequence,
+        behavioral_transition_dict_50,
+        neural_state_dict_50,
+        pair_transition_dict_50,
+        label="min_attempts=50"
     )
 
-    _, _, error_history_100 = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_path_animation.mp4")
-    error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Normalized Error Plot Over Same Route: min50 vs min100")
+    summarize_fixed_route_coverage(
+        shared_route_sequence,
+        behavioral_transition_dict_100,
+        neural_state_dict_100,
+        pair_transition_dict_100,
+        label="min_attempts=100"
+    )
 
-    '''converted_prob_pair_transition_dict = convert_count_to_probability(pair_transition_dict)
-    for i, (key, value) in enumerate(converted_prob_pair_transition_dict.items()):
-        print(f"{key}: {value}\n")
-        if i == 5:
-            break
-    path = os.path.join(SCRIPT_DIR, "RNN_cache/pair_transition/pair_transition_min100_max151_sd42.npz")
-    loaded = np.load(path, allow_pickle=True)
-    print(loaded.files)
-    loaded_n_state_dict = loaded['pair_dict'].item()
-    print(type(loaded_n_state_dict))
-    print(len(loaded_n_state_dict))
+    summarize_error_history(error_history_50, label="min_attempts=50")
+    summarize_error_history(error_history_100, label="min_attempts=100")'''
 
-    for i, (key, value) in enumerate(loaded_n_state_dict.items()):
-        print(f"{key}: {value}\n")
-        if i == 5:
-            break'''
-    
-    #b_to_n_dict = build_b_to_n_map(pair_transition_dict)
-    #nheat = n_state_distribution_heatmap(b_to_n_dict, agg="union")
-    #bheat = b_state_distribution_heatmap(all_visit_count_b_dict, agg="mean")
-    #joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union")
+    '''b_to_n_dict = build_b_to_n_map(pair_transition_dict_100)
+    nheat = n_state_distribution_heatmap(b_to_n_dict, agg="union")
+    bheat = b_state_distribution_heatmap(all_visit_count_b_dict_100, agg="mean")
+    joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union")
 
     #n_distrib_overlay = n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce="sum")
-    #_, _, error_history_50 = animate_json_lookup_transition_clean(pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, max_steps=50, interval=1200, save_path=None, show_plot=False)
-    '''json_path = os.path.join(SCRIPT_DIR, "behavioral_neural_state_table.json")
+
+    json_path = os.path.join(SCRIPT_DIR, "behavioral_neural_state_table.json")
     out_ready = json_b_to_n_state(pair_transition_dict, 'count')
     with open(json_path, "w") as f:
         json.dump(out_ready, f, indent=2)
@@ -2147,9 +2362,9 @@ if __name__ == "__main__":
     json_prob_path = os.path.join(SCRIPT_DIR, "behavioral_to_neural_state_probabilities.json")
     out_ready_prob = json_b_to_n_state(converted_prob_n_transition_dict, 'probability')
     with open(json_prob_path, "w") as f:
-        json.dump(out_ready_prob, f, indent=2)'''
+        json.dump(out_ready_prob, f, indent=2)
     
-    """one_step_b_trans, one_step_n_trans, one_step_pair_trans = one_step_probability(
+    one_step_b_trans, one_step_n_trans, one_step_pair_trans = one_step_probability(
         behavioral_transition_dict, n_state_dict, pair_transition_dict
     )
 
@@ -2168,8 +2383,7 @@ if __name__ == "__main__":
     n_step_json_path = os.path.join(SCRIPT_DIR, f"{num_steps}_step_transition_probabilities.json")
     n_step_out_ready = json_b_to_n_state(n_step_dict, 'probability')
     with open(n_step_json_path, "w") as f:
-        json.dump(n_step_out_ready, f, indent=2)'''
-
+        json.dump(n_step_out_ready, f, indent=2)
     num_steps = 2
     #test_deg = test_degeneracy(pair_transition_dict)
     b_to_n_JSON, n_to_b_JSON = dynamic_degeneracy_probability(pair_transition_dict, num_steps=num_steps, gen_JSON=True)
@@ -2182,7 +2396,7 @@ if __name__ == "__main__":
     with open(n_to_b_dynamic_json_path, "w") as f:
         json.dump(n_to_b_JSON, f, indent=2)"""
         
-    '''scores_b_to_n, scores_n_to_b = dynamic_degeneracy_score(pair_transition_dict)
+    scores_b_to_n, scores_n_to_b = dynamic_degeneracy_score(pair_transition_dict)
 
     print("\nDynamic degeneracy scores (b to n):")
     print("Mean dynamic difference:", np.mean(scores_b_to_n))

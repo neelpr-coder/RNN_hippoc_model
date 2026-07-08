@@ -262,7 +262,7 @@ def plot_neural_state_euclidean_confusion_matrix(
 
 if __name__ == "__main__":
     neural_state_vector_similarity_heatmaps(top_k=100)
-    '''model = small_model.RNN().to(fig2.device)
+    model = small_model.RNN().to(fig2.device)
     sweep_results = fig2.sweep_data_gen(
         model,
         step_size=5,
@@ -300,4 +300,4 @@ if __name__ == "__main__":
             y_labels_100,
             title="Euclidean Distance Between Top Neural States: min50 vs min100",
             tick_step=10
-        )'''
+        )
