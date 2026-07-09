@@ -4,10 +4,14 @@ from umap import UMAP
 import numpy as np
 import os 
 from collections import defaultdict
-import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.spatial import ConvexHull
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from scipy.ndimage import gaussian_filter, binary_closing, binary_fill_holes, label
+from skimage.measure import marching_cubes
+from matplotlib.lines import Line2D
+from scipy.spatial import cKDTree
+import matplotlib.tri as mtri
+
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -72,33 +76,50 @@ def convert_dict_to_matrix(cached_dict, dict_type=None):
     """
     Converts a dictionary of neural states into a matrix format suitable for manifold learning.
     """
+    def behavioral_state_to_vector(b_state):
+        x, y, heading_idx = b_state
+        theta = float(heading_idx) * (2 * np.pi / 4)
+        return np.array([x, y, np.cos(theta), np.sin(theta)], dtype=float)
+
+    def paired_state_to_vector(pair_state):
+        (B0, N0) = pair_state
+        b_vector = behavioral_state_to_vector(B0)
+        n_vector = np.array(N0, dtype=float)
+        return np.concatenate([b_vector, n_vector])
+    
     if dict_type == None:
         raise ValueError("dict_type cannot be None. Please specify 'neural_state', 'behavioral_state', or 'paired_transition'.")
     if dict_type == 'neural_state':
         neural_key_set = set()
-
         for key1, inner_dict in cached_dict.items():
             neural_key_set.add(key1)
             for key2 in inner_dict.keys():
                 neural_key_set.add(key2)
-
         neural_keys = list(neural_key_set)
         matrix = np.array(neural_keys, dtype=float)
-
         return matrix, neural_keys
-
     elif dict_type == 'behavioral_state':
-        for key1 in cached_dict:
-            for key2 in cached_dict[key1]:
-                cached_dict[key1][key2] = np.array(cached_dict[key1][key2])
-        return np.array([item for sublist in cached_dict.values() for item in sublist])
+        b_set = set()
+        for key1, inner_dict in cached_dict.items():
+            b_set.add(key1)
+            for key2 in inner_dict.keys():
+                b_set.add(key2)
+        
+        b_list = list(b_set)
+        b_matrix = np.array([behavioral_state_to_vector(b) for b in b_set], dtype=float)
+        return b_matrix, b_list
     elif dict_type == 'paired_transition':
-        for key1 in cached_dict:
-            for key2 in cached_dict[key1]:
-                cached_dict[key1][key2] = np.array(cached_dict[key1][key2])
-        return np.array([item for sublist in cached_dict.values() for item in sublist]) # check if right
+        paired_set = set()
+        for key1, inner_dict in cached_dict.items():
+            paired_set.add(key1)
+            for key2 in inner_dict.keys():
+                paired_set.add(key2)
+            
+        paired_list = list(paired_set)
+        paired_matrix = np.array([paired_state_to_vector(p) for p in paired_set], dtype=float)
+        return paired_matrix, paired_list
     else:
-        return ValueError("Unsupported dict_type. Please use 'neural_state', 'behavioral_state', or 'paired_transition'.")
+        raise ValueError("Unsupported dict_type. Please use 'neural_state', 'behavioral_state', or 'paired_transition'.")
     
 
 def perform_manifold_learning(matrix, method='tsne', n_components=3, random_state=42):
@@ -113,102 +134,478 @@ def perform_manifold_learning(matrix, method='tsne', n_components=3, random_stat
 
     return manifold.fit_transform(matrix)
 
-def plot_manifold(manifold_data, neural_keys, route_sequence=None, save_path=None):
 
+def build_density_surface_from_points(
+    points,
+    reference_points=None,
+    grid_size=72,
+    sigma=3.0,
+    threshold_percentile=50,
+    padding=0.12,
+    closing_iterations=3,
+    fill_holes=True
+):
+    points = np.asarray(points, dtype=float)
 
-    fig = plt.figure(figsize=(10, 8))
+    if reference_points is None:
+        reference_points = points
+    else:
+        reference_points = np.asarray(reference_points, dtype=float)
+
+    mins = reference_points.min(axis=0)
+    maxs = reference_points.max(axis=0)
+    span = maxs - mins
+
+    mins = mins - padding * span
+    maxs = maxs + padding * span
+    span = maxs - mins
+
+    scaled = (points - mins) / span
+    scaled = np.clip(scaled, 0, 1)
+
+    voxel_coords = np.round(scaled * (grid_size - 1)).astype(int)
+
+    volume = np.zeros((grid_size, grid_size, grid_size), dtype=float)
+
+    for x, y, z in voxel_coords:
+        volume[x, y, z] += 1.0
+
+    density = gaussian_filter(volume, sigma=sigma)
+
+    nonzero = density[density > 0]
+    if len(nonzero) == 0:
+        raise ValueError("Density field is empty.")
+
+    threshold = np.percentile(nonzero, threshold_percentile)
+    binary = density >= threshold
+
+    for _ in range(closing_iterations):
+        binary = binary_closing(binary)
+
+    if fill_holes:
+        binary = binary_fill_holes(binary)
+
+    labeled, num_labels = label(binary)
+
+    if num_labels > 1:
+        component_sizes = np.bincount(labeled.ravel())
+        component_sizes[0] = 0
+        largest_label = np.argmax(component_sizes)
+        binary = labeled == largest_label
+
+    verts, faces, normals, values = marching_cubes(binary.astype(float), level=0.5)
+
+    verts = verts / (grid_size - 1)
+    verts = mins + verts * span
+
+    return verts, faces
+
+def get_route_region_points(
+    manifold,
+    neural_keys,
+    route_sequence,
+    interpolation_steps=3
+):
+    """
+    Gets points for the red route-region solid using only the exact neural
+    states from the animation route, plus interpolation between consecutive
+    route states.
+
+    Avoids adding nearby non-route neural states.
+    """
+
+    neural_path = extract_neural_path_from_route(route_sequence)
+    key_to_idx = {key: i for i, key in enumerate(neural_keys)}
+
+    route_indices = []
+
+    for n_state in neural_path:
+        if n_state in key_to_idx:
+            route_indices.append(key_to_idx[n_state])
+
+    if len(route_indices) == 0:
+        raise ValueError("No route neural states matched manifold neural keys.")
+
+    exact_route_coords = manifold[route_indices]
+
+    # Interpolate between consecutive exact route points
+    interpolated_points = []
+
+    for i in range(len(exact_route_coords) - 1):
+        p0 = exact_route_coords[i]
+        p1 = exact_route_coords[i + 1]
+
+        for t in np.linspace(0, 1, interpolation_steps, endpoint=False):
+            interpolated_points.append((1 - t) * p0 + t * p1)
+
+    interpolated_points.append(exact_route_coords[-1])
+
+    route_region_points = np.array(interpolated_points)
+
+    print(f"Exact route neural states found: {len(route_indices)}/{len(neural_path)}")
+    print(f"Route-region points used for red solid: {len(route_region_points)}")
+    print("Note: extra points are interpolated along the route, not extra neural states.")
+
+    return route_region_points, exact_route_coords, route_indices
+
+def plot_manifold(
+    manifold, 
+    neural_keys,
+    route_sequence,
+    save_path=None,
+
+    # gray full manifold solid
+    gray_grid_size=72,
+    gray_sigma=3.0,
+    gray_threshold_percentile=50,
+    gray_closing_iterations=1,
+    gray_fill_holes=True,
+
+    red_grid_size=128,
+    red_closing_iterations=0,
+    red_fill_holes=False,
+    red_sigma=2.5,
+    red_threshold_percentile=40,
+
+    show_exact_route_points=False
+):
+    """
+    Creates one continuous gray solid from all manifold points.
+    Colors the surface region near the predetermined neural route red.
+    """
+
+    gray_verts, gray_faces = build_density_surface_from_points(
+        manifold,
+        reference_points=manifold,
+        grid_size=gray_grid_size,
+        sigma=gray_sigma,
+        threshold_percentile=gray_threshold_percentile,
+        closing_iterations=gray_closing_iterations,
+        fill_holes=gray_fill_holes
+    )
+
+    # Red solid: route-region neural states
+    route_region_points, exact_route_coords, route_indices = get_route_region_points(
+        manifold,
+        neural_keys,
+        route_sequence,
+        interpolation_steps=1
+    )
+
+    red_verts, red_faces = build_density_surface_from_points(
+        route_region_points,
+        reference_points=manifold,
+        grid_size=red_grid_size,
+        sigma=red_sigma,
+        threshold_percentile=red_threshold_percentile,
+        closing_iterations=red_closing_iterations,
+        fill_holes=red_fill_holes
+    )
+
+    # Plot
+    fig = plt.figure(figsize=(11, 9))
     ax = fig.add_subplot(111, projection="3d")
 
-    # Plot all neural states
-    ax.scatter(
-        manifold_data[:, 0],
-        manifold_data[:, 1],
-        manifold_data[:, 2],
-        s=8,
-        alpha=0.25,
-        label="All neural states"
+    gray_surface = Poly3DCollection(
+        gray_verts[gray_faces],
+        facecolors=(0.70, 0.70, 0.70, 0.22),
+        edgecolor=(0.45, 0.45, 0.45, 0.10),
+        linewidths=0.08
     )
+    ax.add_collection3d(gray_surface)
 
-    # Convex hull surface
-    hull = ConvexHull(manifold_data)
-    faces = [manifold_data[simplex] for simplex in hull.simplices]
-
-    surface = Poly3DCollection(
-        faces,
-        alpha=0.12,
-        linewidths=0.3
+    red_surface = Poly3DCollection(
+        red_verts[red_faces],
+        facecolors=(1.0, 0.0, 0.0, 0.80),
+        edgecolor=(0.45, 0.0, 0.0, 0.20),
+        linewidths=0.10
     )
-    surface.set_edgecolor("gray")
-    ax.add_collection3d(surface)
+    ax.add_collection3d(red_surface)
 
-    # Highlight predetermined path
-    if route_sequence is not None:
-        neural_path = extract_neural_path_from_route(route_sequence)
+    # Optional exact route points
+    if show_exact_route_points:
+        ax.scatter(
+            exact_route_coords[:, 0],
+            exact_route_coords[:, 1],
+            exact_route_coords[:, 2],
+            s=20,
+            color="darkred",
+            alpha=1.0,
+            zorder=10
+        )
 
-        key_to_idx = {key: idx for idx, key in enumerate(neural_keys)}
+    # Axis limits
+    all_xyz = np.vstack([gray_verts, red_verts])
+    mins = all_xyz.min(axis=0)
+    maxs = all_xyz.max(axis=0)
+    centers = (mins + maxs) / 2
+    max_range = np.max(maxs - mins) / 2
 
-        path_indices = []
-        missing = 0
-
-        for n_state in neural_path:
-            if n_state in key_to_idx:
-                path_indices.append(key_to_idx[n_state])
-            else:
-                missing += 1
-
-        if len(path_indices) > 0:
-            path_coords = manifold_data[path_indices]
-
-            ax.plot(
-                path_coords[:, 0],
-                path_coords[:, 1],
-                path_coords[:, 2],
-                linewidth=3.0,
-                color="red",
-                label="Predetermined neural path"
-            )
-
-            ax.scatter(
-                path_coords[:, 0],
-                path_coords[:, 1],
-                path_coords[:, 2],
-                s=55,
-                color="red",
-                alpha=1.0,
-                zorder=10
-            )
-
-            # Mark start and end
-            ax.scatter(
-                path_coords[0, 0],
-                path_coords[0, 1],
-                path_coords[0, 2],
-                s=95,
-                color="green",
-                alpha=1.0,
-                label="Path start",
-                zorder=11
-            )
-
-            ax.scatter(
-                path_coords[-1, 0],
-                path_coords[-1, 1],
-                path_coords[-1, 2],
-                s=95,
-                color="black",
-                alpha=1.0,
-                label="Path end",
-                zorder=11
-            )
-
-        print(f"Path states found in manifold: {len(path_indices)}/{len(neural_path)}")
-        print(f"Missing path states: {missing}")
+    ax.set_xlim(centers[0] - max_range, centers[0] + max_range)
+    ax.set_ylim(centers[1] - max_range, centers[1] + max_range)
+    ax.set_zlim(centers[2] - max_range, centers[2] + max_range)
 
     ax.set_xlabel("t-SNE 1")
     ax.set_ylabel("t-SNE 2")
     ax.set_zlabel("t-SNE 3")
-    ax.legend()
 
+    ax.set_title(
+        "3D t-SNE Neural-State Solid with Animation Route Region Highlighted"
+    )
+
+    legend_elements = [
+        Line2D(
+            [0], [0],
+            marker='s',
+            color='w',
+            label='Animation-route neural-state region',
+            markerfacecolor='red',
+            markersize=10
+        ),
+        Line2D(
+            [0], [0],
+            marker='s',
+            color='w',
+            label='All neural states',
+            markerfacecolor='gray',
+            markersize=10
+        )
+    ]
+
+    ax.legend(handles=legend_elements, loc="upper right")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
+
+def plot_manifold_raw(
+    manifold,
+    neural_keys,
+    route_sequence,
+    save_path=None,
+    show_route_line=True,
+    show_all_points=True
+):
+    """
+    Raw 3D manifold plot.
+    """
+
+    neural_path = extract_neural_path_from_route(route_sequence)
+    key_to_idx = {key: i for i, key in enumerate(neural_keys)}
+
+    route_indices = []
+
+    for n_state in neural_path:
+        if n_state in key_to_idx:
+            route_indices.append(key_to_idx[n_state])
+
+    if len(route_indices) == 0:
+        raise ValueError("No route neural states matched manifold neural keys.")
+
+    route_coords = manifold[route_indices]
+
+    print(f"Exact route neural states found: {len(route_indices)}/{len(neural_path)}")
+    print(f"Unique route neural states: {len(set(neural_path))}")
+
+    fig = plt.figure(figsize=(11, 9))
+    ax = fig.add_subplot(111, projection="3d")
+
+    if show_all_points:
+        ax.scatter(
+            manifold[:, 0],
+            manifold[:, 1],
+            manifold[:, 2],
+            s=12,
+            color="blue",
+            alpha=0.75,
+            label="All neural states"
+        )
+
+    ax.scatter(
+        route_coords[:, 0],
+        route_coords[:, 1],
+        route_coords[:, 2],
+        s=12,
+        color="red",
+        alpha=0.95,
+        label="Animation-route neural states",
+        zorder=10
+    )
+
+    if show_route_line:
+        ax.plot(
+            route_coords[:, 0],
+            route_coords[:, 1],
+            route_coords[:, 2],
+            color="red",
+            linewidth=1.8,
+            alpha=0.85,
+            zorder=9
+        )
+
+    ax.set_title("3D t-SNE Projection of Neural States with Animation Route Highlighted")
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
+    ax.set_zlabel("t-SNE 3")
+
+    ax.legend(loc="upper right")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
+
+def filter_long_triangles(triangulation, points_2d, max_edge_length=None, scale=3.0):
+    """
+    Masks triangles with overly long edges.
+
+    This does not move points or smooth data.
+    It only removes triangle connections that span large gaps.
+    """
+    triangles = triangulation.triangles
+    keep = []
+
+    if max_edge_length is None:
+        tree = cKDTree(points_2d)
+        dists, _ = tree.query(points_2d, k=2)
+        nearest_neighbor_dists = dists[:, 1]
+
+        max_edge_length = np.percentile(nearest_neighbor_dists, 90) * scale
+
+    for tri in triangles:
+        p0, p1, p2 = points_2d[tri]
+
+        e01 = np.linalg.norm(p0 - p1)
+        e12 = np.linalg.norm(p1 - p2)
+        e20 = np.linalg.norm(p2 - p0)
+
+        if max(e01, e12, e20) <= max_edge_length:
+            keep.append(True)
+        else:
+            keep.append(False)
+
+    triangulation.set_mask(~np.array(keep))
+    return triangulation
+
+def plot_manifold_trisurf_raw(
+    manifold,
+    neural_keys,
+    route_sequence,
+    save_path=None,
+    show_points=True,
+    show_route_line=True,
+    all_points_color="blue",
+    route_color="red",
+    surface_color="lightgray",
+    point_size=10,
+    route_point_size=10,
+    all_points_alpha=0.12,
+    route_points_alpha=0.95,
+    surface_alpha=0.28,
+    surface_linewidth=0.15,
+    route_linewidth=1.2,
+    max_edge_length=None
+):
+    """
+    Raw triangulated 3D manifold plot with filtered triangles.
+
+    - Triangulates using t-SNE 1 and t-SNE 2
+    - Uses t-SNE 3 as height
+    - Filters long triangles to avoid artificial bridges
+    - Overlays exact route neural states and optional route line
+    """
+
+    neural_path = extract_neural_path_from_route(route_sequence)
+    key_to_idx = {key: i for i, key in enumerate(neural_keys)}
+
+    route_indices = []
+    for n_state in neural_path:
+        if n_state in key_to_idx:
+            route_indices.append(key_to_idx[n_state])
+
+    if len(route_indices) == 0:
+        raise ValueError("No route neural states matched manifold neural keys.")
+
+    route_coords = manifold[route_indices]
+
+    print(f"Exact route neural states found: {len(route_indices)}/{len(neural_path)}")
+    print(f"Unique route neural states: {len(set(neural_path))}")
+
+    x = manifold[:, 0]
+    y = manifold[:, 1]
+    z = manifold[:, 2]
+
+    points_2d = manifold[:, :2]
+
+    triangulation = mtri.Triangulation(x, y)
+    triangulation = filter_long_triangles(
+        triangulation,
+        points_2d,
+        max_edge_length=max_edge_length
+    )
+
+    fig = plt.figure(figsize=(11, 9))
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Raw triangulated manifold surface
+    ax.plot_trisurf(
+        triangulation,
+        z,
+        color=surface_color,
+        alpha=surface_alpha,
+        linewidth=surface_linewidth,
+        edgecolor="gray"
+    )
+
+    # Optional raw manifold points
+    if show_points:
+        ax.scatter(
+            x,
+            y,
+            z,
+            s=point_size,
+            color=all_points_color,
+            alpha=all_points_alpha,
+            label="All neural states"
+        )
+
+    # Exact route points
+    ax.scatter(
+        route_coords[:, 0],
+        route_coords[:, 1],
+        route_coords[:, 2],
+        s=route_point_size,
+        color=route_color,
+        alpha=route_points_alpha,
+        label="Animation-route neural states",
+        zorder=10
+    )
+
+    # Exact route line
+    if show_route_line:
+        ax.plot(
+            route_coords[:, 0],
+            route_coords[:, 1],
+            route_coords[:, 2],
+            color=route_color,
+            linewidth=route_linewidth,
+            alpha=0.85,
+            zorder=9
+        )
+
+    ax.set_title("Raw 3D t-SNE Neural-State Surface with Animation Route")
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
+    ax.set_zlabel("t-SNE 3")
+
+    ax.legend(loc="upper right")
     plt.tight_layout()
 
     if save_path is not None:
@@ -226,5 +623,56 @@ if __name__ == '__main__':
     print("t-SNE manifold shape:", n_tsne_manifold.shape)
 
     neural_route = np.load(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), allow_pickle=True)
+
+    np.save("n_tsne_manifold_min100_sd42.npy", n_tsne_manifold)
+    np.save("neural_keys_min100_sd42.npy", np.array(neural_keys, dtype=object))
+
+    '''plot_manifold_trisurf_raw(
+        n_tsne_manifold,
+        neural_keys,
+        route_sequence=neural_route,
+        save_path=None,
+        show_points=True,
+        show_route_line=True,
+        all_points_color="blue",
+        route_color="red",
+        surface_color="blue",
+        point_size=10,
+        route_point_size=30,
+        all_points_alpha=0.65,
+        route_points_alpha=0.95,
+        surface_alpha=0.65,
+        surface_linewidth=0.3,
+        route_linewidth=1.0,
+        max_edge_length=1
+    )'''
+
+    '''plot_manifold_raw(
+        n_tsne_manifold,
+        neural_keys,
+        route_sequence=neural_route,
+        save_path=None,
+        show_route_line=True,
+        show_all_points=True
+    )'''
     
-    plot_manifold(n_tsne_manifold, neural_keys, route_sequence=neural_route, save_path=None)
+    plot_manifold(
+        n_tsne_manifold,
+        neural_keys,
+        route_sequence=neural_route,
+        save_path=None,
+
+        gray_grid_size=128,
+        gray_sigma=1,
+        gray_threshold_percentile=70,
+        gray_closing_iterations=0,
+        gray_fill_holes=False,
+
+        red_grid_size=128,
+        red_sigma=0.5,
+        red_threshold_percentile=80,
+        red_closing_iterations=0,
+        red_fill_holes=False,
+
+        show_exact_route_points=False
+    )

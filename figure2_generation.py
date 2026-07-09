@@ -1555,12 +1555,6 @@ def animate_json_lookup_transition_clean(
 ):
     """
     Animate lookup along a predetermined 50-step route.
-
-    Error is defined as:
-        actual_prob - calculated_prob
-    where:
-        actual_prob     = P((B1,N1) | (B0,N0))
-        calculated_prob = P(B1 | B0) * P(N1 | N0)
     """
 
     # Probability versions
@@ -1669,8 +1663,14 @@ def animate_json_lookup_transition_clean(
             spine.set_linewidth(1.0)
             spine.set_edgecolor("#444444")
 
+    def heading_index_to_degrees(heading_idx):
+        return int(heading_idx) * 90
+
+
     def fmt_b(b_state):
-        return str(b_state)
+        x, y, heading_idx = b_state
+        heading_degrees = heading_index_to_degrees(heading_idx)
+        return f"({x}, {y}, {heading_degrees}°)"
 
     def fmt_n(n_state):
         return n_label_map.get(n_state, "N?")
@@ -1982,11 +1982,12 @@ def animate_json_lookup_transition_clean(
         )
 
         # Put current-state annotation in the reserved right-side area.
-        current_heading = B1[2]
+        current_heading_degrees = heading_index_to_degrees(B1[2])
+
         route_ax.text(
             9.75,
             9.15,
-            f"Current state:\n{B1}\nHeading (Degrees): {current_heading * 90}",
+            f"Current state:\n{fmt_b(B1)}",
             ha="left",
             va="top",
             fontsize=9.0,
