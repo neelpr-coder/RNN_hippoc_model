@@ -1542,6 +1542,45 @@ def generate_supported_observed_pair_route(
         "Try lowering thresholds or increasing bin size."
     )
 
+def save_top3_route_transitions(
+    route_sequence,
+    b_transition_dict,
+    neural_state_dict,
+    pair_transition_dict,
+    top_k=3
+):
+    """
+    Save the exact top-k transitions shown in the animation for each frame as a list.
+    """
+
+    top3_history = []
+
+    for frame_idx, (B0, N0, B1, N1, observed_count) in enumerate(route_sequence):
+        b_count_nexts = b_transition_dict.get(B0, {})
+        n_count_nexts = neural_state_dict.get(N0, {})
+        pair_count_nexts = pair_transition_dict.get((B0, N0), {})
+
+        top3_b = get_top_k_items(b_count_nexts, k=top_k)
+        top3_n = get_top_k_items(n_count_nexts, k=top_k)
+        top3_pair = get_top_k_items(pair_count_nexts, k=top_k)
+
+        top3_history.append({
+            "frame": frame_idx + 1,
+
+            "B0": B0,
+            "N0": N0,
+            "B1": B1,
+            "N1": N1,
+            "observed_count": observed_count,
+
+            # Exact top 3 lists shown in the animation text boxes
+            "top3_b": top3_b,
+            "top3_n": top3_n,
+            "top3_pair": top3_pair
+        })
+
+    return top3_history
+
 def animate_json_lookup_transition_clean(
     pair_transition_dict,
     b_transition_dict,
@@ -2326,6 +2365,9 @@ if __name__ == "__main__":
     _, route100, error_history_100 = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_animation_min100.mp4")
     np.save(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), np.array(route100, dtype=object), allow_pickle=True)
 
+    top3_route_history_100 = save_top3_route_transitions(route100, behavioral_transition_dict_100, neural_state_dict_100, pair_transition_dict_100, top_k=3)
+
+    np.save(os.path.join(SCRIPT_DIR, "top3_route_transitions_min100.npy"), np.array(top3_route_history_100, dtype=object), allow_pickle=True)
     #error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Raw Error Plot Over Same Route: min50 vs min100", use_normalized=False, show_points=True)
 
     '''summarize_fixed_route_coverage(
