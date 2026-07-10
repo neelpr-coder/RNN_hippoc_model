@@ -5,12 +5,9 @@ import numpy as np
 import os 
 from collections import defaultdict
 import matplotlib.pyplot as plt
-#from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-#from scipy.ndimage import gaussian_filter, binary_closing, binary_fill_holes, label
-#from skimage.measure import marching_cubes
-#from matplotlib.lines import Line2D
 from scipy.spatial import cKDTree
 import matplotlib.tri as mtri
+from collections import Counter
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -198,11 +195,6 @@ def extract_state_path_from_route(route_sequence, state_type):
 def get_top3_current_and_targets(frame_info, state_type):
     """
     Uses the saved top-3 transitions from figure2_generation.py.
-
-    These are the exact top 3 shown in the animation panels:
-        top3_b    = behavioral transition lookup panel
-        top3_n    = neural transition lookup panel
-        top3_pair = actual pair transition lookup panel
     """
 
     if state_type == "neural states":
@@ -248,40 +240,73 @@ def get_actual_next_state_from_frame(frame_info, state_type):
             "'behavioral states', or 'joint states'."
         )
 
-def plot_manifold_raw(
+def plot_manifold_raw_two_route(
     manifold,
     manifold_type,
     state_keys,
     state_type,
     route_sequence,
-    top3_route_history=None,
-    save_path=None,
-    show_route_line=True,
+    top3_route_history,
+    save_prefix=None,
     show_all_points=True,
-    show_top3=True
+    make_full_plot=True,
+    make_zoomed_plot=True,
+    zoom_padding_fraction=0.18,
+    zoom_percentile=5,
+    visual_offset_fraction=0.018,
+    full_background_alpha=0.20,
+    zoom_background_alpha=0.08,
+    full_background_point_size=9,
+    zoom_background_point_size=6
 ):
     """
-    Raw 3D manifold plot.
-
-    Blue   = all states
-    Red    = actual route states
-    Green  = top-3 predicted target states that are NOT the actual next state
-             for that specific frame
-    Orange = top-3 predicted target states that ARE the actual next state
-             for that specific frame
-
-    Important:
-        Orange is now frame-by-frame.
-        It does NOT mean the state appears somewhere in both the route and predictions.
-        It means that at a given frame, the actual next state was one of the top-3
-        predicted targets from the dictionary.
+    Plot actual route vs highest-probability predicted route.
+    Zoom and normal view
     """
 
-    # -------------------------
-    # Build actual route path
-    # -------------------------
-    state_path = extract_state_path_from_route(route_sequence, state_type)
+    # --------------------------------------------------
+    # 1. Actual ordered route path
+    # --------------------------------------------------
+    actual_state_path = extract_state_path_from_route(route_sequence, state_type)
 
+    if len(actual_state_path) == 0:
+        raise ValueError("Actual route path is empty.")
+
+    # --------------------------------------------------
+    # 2. Build top-1 predicted route path
+    # --------------------------------------------------
+    predicted_state_path = [actual_state_path[0]]
+
+    frame_alignment_mismatches = 0
+
+    for frame_idx, frame_info in enumerate(top3_route_history):
+        current_state, target_states = get_top3_current_and_targets(
+            frame_info,
+            state_type
+        )
+
+        if len(target_states) == 0:
+            raise ValueError(f"No top-3 targets found for frame {frame_idx}.")
+
+        top1_target = target_states[0]
+        predicted_state_path.append(top1_target)
+
+        # Sanity check: saved current state should match actual route state
+        if frame_idx < len(actual_state_path):
+            actual_current_state = actual_state_path[frame_idx]
+
+            if make_hashable_state(current_state) != make_hashable_state(actual_current_state):
+                frame_alignment_mismatches += 1
+
+    if frame_alignment_mismatches > 0:
+        print(
+            f"Warning: {frame_alignment_mismatches} frame(s) had current states in "
+            f"top3_route_history that did not match the actual route state."
+        )
+
+    # --------------------------------------------------
+    # 3. Map manifold keys -> indices
+    # --------------------------------------------------
     hashable_state_keys = [
         make_hashable_state(key)
         for key in state_keys
@@ -292,198 +317,334 @@ def plot_manifold_raw(
         for i, key in enumerate(hashable_state_keys)
     }
 
-    # -------------------------
-    # Match actual route states to manifold indices
-    # -------------------------
-    route_indices = []
-    missing_route = 0
+    # --------------------------------------------------
+    # 4. Actual route indices
+    # --------------------------------------------------
+    actual_indices = []
+    missing_actual = 0
 
-    for state in state_path:
+    for state in actual_state_path:
         h_state = make_hashable_state(state)
 
         if h_state in key_to_idx:
-            route_indices.append(key_to_idx[h_state])
+            actual_indices.append(key_to_idx[h_state])
         else:
-            missing_route += 1
+            missing_actual += 1
 
-    if len(route_indices) == 0:
-        raise ValueError(f"No route {state_type} matched manifold keys.")
+    if len(actual_indices) == 0:
+        raise ValueError(f"No actual {state_type} route states matched manifold keys.")
 
-    route_coords = manifold[route_indices]
-    route_index_set = set(route_indices)
+    # --------------------------------------------------
+    # 5. Predicted route indices
+    # --------------------------------------------------
+    predicted_indices = []
+    missing_predicted = 0
 
-    print(f"Exact route {state_type} found: {len(route_indices)}/{len(state_path)}")
-    print(f"Missing route {state_type}: {missing_route}")
-    print(f"Unique route {state_type}: {len(route_index_set)}")
+    for state in predicted_state_path:
+        h_state = make_hashable_state(state)
 
-    # -------------------------
-    # Match top-3 predicted targets frame-by-frame
-    # -------------------------
-    top3_match_indices = set()
-    top3_nonmatch_indices = set()
+        if h_state in key_to_idx:
+            predicted_indices.append(key_to_idx[h_state])
+        else:
+            missing_predicted += 1
 
-    missing_top3_targets = 0
-    total_top3_targets = 0
+    if len(predicted_indices) == 0:
+        raise ValueError(f"No predicted {state_type} route states matched manifold keys.")
 
-    frames_actual_next_in_top3 = 0
-    total_frames_checked = 0
+    # --------------------------------------------------
+    # 6. Trim to common frame length
+    # --------------------------------------------------
+    common_len = min(len(actual_indices), len(predicted_indices))
 
-    if show_top3 and top3_route_history is not None:
-        for frame_info in top3_route_history:
-            _, target_states = get_top3_current_and_targets(
-                frame_info,
-                state_type
-            )
+    actual_indices = actual_indices[:common_len]
+    predicted_indices = predicted_indices[:common_len]
 
-            actual_next_state = get_actual_next_state_from_frame(
-                frame_info,
-                state_type
-            )
+    actual_state_path = actual_state_path[:common_len]
+    predicted_state_path = predicted_state_path[:common_len]
 
-            h_actual_next = make_hashable_state(actual_next_state)
+    actual_coords = manifold[actual_indices]
+    predicted_coords = manifold[predicted_indices]
 
-            actual_next_found_this_frame = False
-            total_frames_checked += 1
+    matching_frames = []
+    actual_only_frames = []
+    predicted_only_frames = []
 
-            for target_state in target_states:
-                total_top3_targets += 1
-                h_target = make_hashable_state(target_state)
+    # Start at 1 because frame 0 is the shared initial state.
+    # The real transition comparison is actual next state vs predicted next state.
+    for frame_idx in range(1, common_len):
+        actual_state = make_hashable_state(actual_state_path[frame_idx])
+        predicted_state = make_hashable_state(predicted_state_path[frame_idx])
 
-                if h_target in key_to_idx:
-                    target_idx = key_to_idx[h_target]
+        if actual_state == predicted_state:
+            matching_frames.append(frame_idx)
+        else:
+            actual_only_frames.append(frame_idx)
+            predicted_only_frames.append(frame_idx)
 
-                    if h_target == h_actual_next:
-                        top3_match_indices.add(target_idx)
-                        actual_next_found_this_frame = True
-                    else:
-                        top3_nonmatch_indices.add(target_idx)
-                else:
-                    missing_top3_targets += 1
+    transition_count = common_len - 1
 
-            if actual_next_found_this_frame:
-                frames_actual_next_in_top3 += 1
+    # --------------------------------------------------
+    # 8. Debug counts
+    # --------------------------------------------------
+    actual_hashable = [
+        make_hashable_state(state)
+        for state in actual_state_path
+    ]
 
-        print(f"Total top-3 predicted targets checked: {total_top3_targets}")
-        print(f"Missing top-3 predicted target states: {missing_top3_targets}")
+    predicted_hashable = [
+        make_hashable_state(state)
+        for state in predicted_state_path
+    ]
+
+    actual_counter = Counter(actual_hashable)
+    predicted_counter = Counter(predicted_hashable)
+
+    print("\n===== Top-1 predicted route diagnostics =====")
+    print(f"Manifold type: {manifold_type}")
+    print(f"State type: {state_type}")
+    print(f"Actual route states found: {len(actual_indices)}/{len(actual_state_path)}")
+    print(f"Missing actual route states: {missing_actual}")
+    print(f"Predicted route states found: {len(predicted_indices)}/{len(predicted_state_path)}")
+    print(f"Missing predicted route states: {missing_predicted}")
+    print(
+    f"Transition-level matches between actual and top-1 predicted route: "
+    f"{len(matching_frames)}/{transition_count}"
+    )
+    print(f"Unique actual route states: {len(set(actual_hashable))}")
+    print(f"Unique predicted route states: {len(set(predicted_hashable))}")
+    print("\nMost common predicted states:")
+    for state, count in predicted_counter.most_common(10):
+        print(f"  count={count}: {state}")
+    print("\nTop-1 predicted state by transition frame:")
+    for frame_idx in range(1, common_len):
+        actual_state = make_hashable_state(actual_state_path[frame_idx])
+        predicted_state = make_hashable_state(predicted_state_path[frame_idx])
+        match_status = "MATCH" if actual_state == predicted_state else "NO MATCH"
+
         print(
-            f"Frames where actual next state is in top 3: "
-            f"{frames_actual_next_in_top3}/{total_frames_checked}"
+            f"  transition {frame_idx:02d}: "
+            f"predicted={predicted_state} | actual={actual_state} | {match_status}"
         )
-        print(f"Unique same-frame matching top-3 states: {len(top3_match_indices)}")
-        print(f"Unique nonmatching top-3 states: {len(top3_nonmatch_indices)}")
+    print("============================================\n")
 
-    # -------------------------
-    # Split plotted groups
-    # -------------------------
-    # Red = actual route states, except states that are orange same-frame matches
-    route_only_indices = route_index_set - top3_match_indices
+    # --------------------------------------------------
+    # 9. Visual coordinate offsets
+    # --------------------------------------------------
+    data_span = manifold.max(axis=0) - manifold.min(axis=0)
+    offset_vector = np.array([
+        visual_offset_fraction * data_span[0],
+        visual_offset_fraction * data_span[1],
+        0.0
+    ])
 
-    # Green = top-3 predictions that did not match the actual next state
-    # If a state is ever a same-frame match, show it as orange instead of green.
-    top3_only_nonmatch_indices = top3_nonmatch_indices - top3_match_indices
+    # These are display-only coordinates.
+    # The underlying manifold coordinates and matching logic are unchanged.
+    actual_plot_coords = actual_coords - offset_vector
+    predicted_plot_coords = predicted_coords + offset_vector
 
-    # Orange = predictions that matched the actual next state for that frame
-    orange_match_indices = top3_match_indices
+    # Gold points stay at true coordinates
+    gold_coords = actual_coords[matching_frames] if len(matching_frames) > 0 else None
 
-    print(f"Route-only states plotted red: {len(route_only_indices)}")
-    print(f"Top-3 nonmatching states plotted green: {len(top3_only_nonmatch_indices)}")
-    print(f"Same-frame matching states plotted orange: {len(orange_match_indices)}")
+    # --------------------------------------------------
+    # 10. Helper for drawing a plot
+    # --------------------------------------------------
+    def draw_route_plot(
+        ax,
+        zoom_to_cluster=False,
+        background_alpha=0.20,
+        background_point_size=9,
+        title_suffix=""
+    ):
+        ax.set_proj_type("ortho")
 
-    # -------------------------
-    # Plot
-    # -------------------------
-    fig = plt.figure(figsize=(11, 9))
-    ax = fig.add_subplot(111, projection="3d")
+        # Background manifold
+        if show_all_points:
+            ax.scatter(
+                manifold[:, 0],
+                manifold[:, 1],
+                manifold[:, 2],
+                s=background_point_size,
+                color="black",
+                alpha=background_alpha,
+                label=f"All {state_type}",
+                zorder=1,
+                depthshade=False
+            )
 
-    # All manifold states
-    if show_all_points:
-        ax.scatter(
-            manifold[:, 0],
-            manifold[:, 1],
-            manifold[:, 2],
-            s=12,
-            color="gray",
-            alpha=0.4,
-            label=f"All {state_type}",
-            zorder=1
-        )
-
-    # Actual route line, using ordered route coordinates
-    if show_route_line and len(route_coords) > 1:
+        # Actual route line, visually offset
         ax.plot(
-            route_coords[:, 0],
-            route_coords[:, 1],
-            route_coords[:, 2],
-            color="black",
-            linewidth=1.8,
-            alpha=0.55,
-            label="Actual route path",
+            actual_plot_coords[:, 0],
+            actual_plot_coords[:, 1],
+            actual_plot_coords[:, 2],
+            color="crimson",
+            linewidth=2.2,
+            alpha=0.72,
+            label="Actual predetermined route",
             zorder=6
         )
 
-    # Red route-only states
-    if len(route_only_indices) > 0:
-        route_only_coords = manifold[list(route_only_indices)]
-
-        ax.scatter(
-            route_only_coords[:, 0],
-            route_only_coords[:, 1],
-            route_only_coords[:, 2],
-            s=40,
-            color="crimson",
-            marker="o",
-            alpha=1.0,
-            label="Actual route states only",
-            zorder=9
-        )
-
-    # Green top-3 predictions that did NOT match actual next state for that frame
-    if show_top3 and len(top3_only_nonmatch_indices) > 0:
-        green_coords = manifold[list(top3_only_nonmatch_indices)]
-
-        ax.scatter(
-            green_coords[:, 0],
-            green_coords[:, 1],
-            green_coords[:, 2],
-            s=85,
+        # Predicted route line, visually offset
+        ax.plot(
+            predicted_plot_coords[:, 0],
+            predicted_plot_coords[:, 1],
+            predicted_plot_coords[:, 2],
             color="deepskyblue",
-            marker="x",
+            linewidth=2.4,
+            linestyle="--",
             alpha=1.0,
-            label="Top-3 predictions not actual next state",
-            zorder=12
+            label="Highest-probability predicted route",
+            zorder=7
         )
 
-    # Orange top-3 predictions that DID match actual next state for that frame
-    if show_top3 and len(orange_match_indices) > 0:
-        orange_coords = manifold[list(orange_match_indices)]
+        # Actual-only points
+        if len(actual_only_frames) > 0:
+            actual_only_coords = actual_plot_coords[actual_only_frames]
 
-        ax.scatter(
-            orange_coords[:, 0],
-            orange_coords[:, 1],
-            orange_coords[:, 2],
-            s=55,
-            color="gold",
-            marker="o",
-            alpha=1.0,
-            label="Top-3 prediction = actual next state",
-            zorder=13
+            ax.scatter(
+                actual_only_coords[:, 0],
+                actual_only_coords[:, 1],
+                actual_only_coords[:, 2],
+                s=48,
+                color="crimson",
+                marker="o",
+                alpha=0.98,
+                label="Actual route only",
+                zorder=10,
+                depthshade=False
+            )
+
+        # Predicted-only points
+        if len(predicted_only_frames) > 0:
+            predicted_only_coords = predicted_plot_coords[predicted_only_frames]
+
+            ax.scatter(
+                predicted_only_coords[:, 0],
+                predicted_only_coords[:, 1],
+                predicted_only_coords[:, 2],
+                s=70,
+                color="deepskyblue",
+                marker="^",
+                alpha=1.0,
+                label="Predicted route only",
+                zorder=11,
+                depthshade=False
+            )
+
+        # Same-frame matches
+        if gold_coords is not None:
+            ax.scatter(
+                gold_coords[:, 0],
+                gold_coords[:, 1],
+                gold_coords[:, 2],
+                s=105,
+                color="gold",
+                edgecolor="black",
+                linewidth=0.9,
+                alpha=1.0,
+                label=f"Same next state ({len(matching_frames)}/{transition_count})",
+                zorder=13,
+                depthshade=False
+            )
+
+        ax.set_title(
+            f"3D {manifold_type} Projection of {state_type}\n"
+            f"Actual Route vs Highest-Probability Predicted Route{title_suffix}"
+        )
+        ax.set_xlabel(f"{manifold_type} 1")
+        ax.set_ylabel(f"{manifold_type} 2")
+        ax.set_zlabel(f"{manifold_type} 3")
+
+        # Cluster zoom based on actual + predicted route coordinates only.
+        if zoom_to_cluster:
+            # Use the plotted/offset route coordinates so the zoom contains
+            # exactly what is visually drawn.
+            zoom_coords = np.vstack([
+                actual_plot_coords,
+                predicted_plot_coords
+            ])
+
+            if gold_coords is not None:
+                zoom_coords = np.vstack([
+                    zoom_coords,
+                    gold_coords
+                ])
+
+            x_min, y_min, z_min = zoom_coords.min(axis=0)
+            x_max, y_max, z_max = zoom_coords.max(axis=0)
+
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+            z_range = z_max - z_min
+
+            # Add padding separately for each axis
+            x_pad = zoom_padding_fraction * max(x_range, 1e-8)
+            y_pad = zoom_padding_fraction * max(y_range, 1e-8)
+            z_pad = zoom_padding_fraction * max(z_range, 1e-8)
+
+            ax.set_xlim(x_min - x_pad, x_max + x_pad)
+            ax.set_ylim(y_min - y_pad, y_max + y_pad)
+            ax.set_zlim(z_min - z_pad, z_max + z_pad)
+
+        # Do not force equal box aspect for PCA because PCA has much smaller z-range.
+        # This prevents the PCA view from looking overly squashed.
+        if manifold_type == "PCA":
+            ax.set_box_aspect((1.35, 1.15, 0.85))
+        else:
+            ax.set_box_aspect((1.25, 1.15, 0.95))
+
+        ax.legend(loc="upper right")
+
+    # --------------------------------------------------
+    # 11. Full view
+    # --------------------------------------------------
+    if make_full_plot:
+        fig_full = plt.figure(figsize=(15, 13))
+        ax_full = fig_full.add_subplot(111, projection="3d")
+
+        draw_route_plot(
+            ax_full,
+            zoom_to_cluster=False,
+            background_alpha=full_background_alpha,
+            background_point_size=full_background_point_size,
+            title_suffix=" (Full View)"
         )
 
-    ax.set_title(
-        f"3D {manifold_type} Projection of {state_type}\n"
-        f"Actual Route vs Top-3 Dictionary Predictions"
-    )
-    ax.set_xlabel(f"{manifold_type} 1")
-    ax.set_ylabel(f"{manifold_type} 2")
-    ax.set_zlabel(f"{manifold_type} 3")
+        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.04, top=0.92)
 
-    ax.legend(loc="upper right")
-    plt.tight_layout()
+        if save_prefix is not None:
+            plt.savefig(
+                f"{save_prefix}_{manifold_type.lower().replace('-', '').replace(' ', '_')}_full.png",
+                dpi=300,
+                bbox_inches="tight"
+            )
 
-    if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.show()
 
-    plt.show()
+    # --------------------------------------------------
+    # 12. Cluster zoom view
+    # --------------------------------------------------
+    if make_zoomed_plot:
+        fig_zoom = plt.figure(figsize=(15, 13))
+        ax_zoom = fig_zoom.add_subplot(111, projection="3d")
+
+        draw_route_plot(
+            ax_zoom,
+            zoom_to_cluster=True,
+            background_alpha=zoom_background_alpha,
+            background_point_size=zoom_background_point_size,
+            title_suffix=" (Cluster Zoom)"
+        )
+
+        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.04, top=0.92)
+
+        if save_prefix is not None:
+            plt.savefig(
+                f"{save_prefix}_{manifold_type.lower().replace('-', '').replace(' ', '_')}_cluster_zoom.png",
+                dpi=300,
+                bbox_inches="tight"
+            )
+
+        plt.show()
 
 def filter_long_triangles(triangulation, points_2d, max_edge_length=None, scale=3.0):
     """
@@ -749,160 +910,228 @@ if __name__ == '__main__':
 
     top3_route_history = np.load(os.path.join(SCRIPT_DIR, "top3_route_transitions_min100.npy"), allow_pickle=True).tolist()
 
-    '''paired_matrix, paired_keys = convert_dict_to_matrix(pair_transition_dict, dict_type='paired_transition')
-    print("Paired transition matrix shape:", paired_matrix.shape)
+    test_dictionary_manifold = "neural"
 
-    paired_tsne_manifold = perform_manifold_learning(paired_matrix, method='tsne', n_components=3, random_state=42)
-    print("Paired transition t-SNE manifold shape:", paired_tsne_manifold.shape)
+    if test_dictionary_manifold == "joint":
+        paired_matrix, paired_keys = convert_dict_to_matrix(pair_transition_dict, dict_type='paired_transition')
+        print("Paired transition matrix shape:", paired_matrix.shape)
 
-    paired_umap_manifold = perform_manifold_learning(paired_matrix, method='umap', n_components=3, random_state=42)
-    print("Paired transition UMAP manifold shape:", paired_umap_manifold.shape)
+        paired_tsne_manifold = perform_manifold_learning(paired_matrix, method='tsne', n_components=3, random_state=42)
+        print("Paired transition t-SNE manifold shape:", paired_tsne_manifold.shape)
 
-    paired_pca_manifold = perform_manifold_learning(paired_matrix, method='pca', n_components=3, random_state=42)
-    print("Paired transition PCA manifold shape:", paired_pca_manifold.shape)
+        paired_umap_manifold = perform_manifold_learning(paired_matrix, method='umap', n_components=3, random_state=42)
+        print("Paired transition UMAP manifold shape:", paired_umap_manifold.shape)
 
-    plot_manifold_raw(
-        paired_tsne_manifold,
-        manifold_type="t-SNE",
-        state_keys=paired_keys,
-        state_type="joint states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )
+        paired_pca_manifold = perform_manifold_learning(paired_matrix, method='pca', n_components=3, random_state=42)
+        print("Paired transition PCA manifold shape:", paired_pca_manifold.shape)
 
-    plot_manifold_raw(
-        paired_umap_manifold,
-        manifold_type="UMAP",
-        state_keys=paired_keys,
-        state_type="joint states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )
+        plot_manifold_raw_two_route(
+            paired_tsne_manifold,
+            manifold_type="t-SNE",
+            state_keys=paired_keys,
+            state_type="joint states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    plot_manifold_raw(
-        paired_pca_manifold,
-        manifold_type="PCA",
-        state_keys=paired_keys,
-        state_type="joint states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )
+        plot_manifold_raw_two_route(
+            paired_umap_manifold,
+            manifold_type="UMAP",
+            state_keys=paired_keys,
+            state_type="joint states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    b_state_matrix, behavioral_keys = convert_dict_to_matrix(behavioral_state_dict, dict_type='behavioral_state')
-    print("Behavioral state matrix shape:", b_state_matrix.shape)
+        plot_manifold_raw_two_route(
+            paired_pca_manifold,
+            manifold_type="PCA",
+            state_keys=paired_keys,
+            state_type="joint states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
+    elif test_dictionary_manifold == 'behavioral':
+        b_state_matrix, behavioral_keys = convert_dict_to_matrix(behavioral_state_dict, dict_type='behavioral_state')
+        print("Behavioral state matrix shape:", b_state_matrix.shape)
 
-    b_tsne_manifold = perform_manifold_learning(b_state_matrix, method='tsne', n_components=3, random_state=42)
-    print("Behavioral t-SNE manifold shape:", b_tsne_manifold.shape)
+        b_tsne_manifold = perform_manifold_learning(b_state_matrix, method='tsne', n_components=3, random_state=42)
+        print("Behavioral t-SNE manifold shape:", b_tsne_manifold.shape)
 
-    b_umap_manifold = perform_manifold_learning(b_state_matrix, method='umap', n_components=3, random_state=42)
-    print("Behavioral UMAP manifold shape:", b_umap_manifold.shape)
+        b_umap_manifold = perform_manifold_learning(b_state_matrix, method='umap', n_components=3, random_state=42)
+        print("Behavioral UMAP manifold shape:", b_umap_manifold.shape)
 
-    b_pca_manifold = perform_manifold_learning(b_state_matrix, method='pca', n_components=3, random_state=42)
-    print("Behavioral PCA manifold shape:", b_pca_manifold.shape)
+        b_pca_manifold = perform_manifold_learning(b_state_matrix, method='pca', n_components=3, random_state=42)
+        print("Behavioral PCA manifold shape:", b_pca_manifold.shape)
 
-    plot_manifold_raw(
-        b_tsne_manifold,
-        manifold_type="t-SNE",
-        state_keys=behavioral_keys,
-        state_type="behavioral states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )
+        plot_manifold_raw_two_route(
+            b_tsne_manifold,
+            manifold_type="t-SNE",
+            state_keys=behavioral_keys,
+            state_type="behavioral states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.18,
+            zoom_percentile=5,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    plot_manifold_raw(
-        b_umap_manifold,
-        manifold_type="UMAP",
-        state_keys=behavioral_keys,
-        state_type="behavioral states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )
+        plot_manifold_raw_two_route(
+            b_umap_manifold,
+            manifold_type="UMAP",
+            state_keys=behavioral_keys,
+            state_type="behavioral states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.18,
+            zoom_percentile=5,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    plot_manifold_raw(
-        b_pca_manifold,
-        manifold_type="PCA",
-        state_keys=behavioral_keys,
-        state_type="behavioral states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=True,
-        show_all_points=True,
-        show_top3=True
-    )'''
- 
-    n_state_matrix, neural_keys = convert_dict_to_matrix(neural_state_dict, dict_type='neural_state')
-    print("Neural state matrix shape:", n_state_matrix.shape)
+        plot_manifold_raw_two_route(
+            b_pca_manifold,
+            manifold_type="PCA",
+            state_keys=behavioral_keys,
+            state_type="behavioral states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.18,
+            zoom_percentile=5,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
+    elif test_dictionary_manifold == "neural":
+        n_state_matrix, neural_keys = convert_dict_to_matrix(neural_state_dict, dict_type='neural_state')
+        print("Neural state matrix shape:", n_state_matrix.shape)
 
 
-    n_tsne_manifold = perform_manifold_learning(n_state_matrix, method='tsne', n_components=3, random_state=42)
-    print("Neural t-SNE manifold shape:", n_tsne_manifold.shape)
+        n_tsne_manifold = perform_manifold_learning(n_state_matrix, method='tsne', n_components=3, random_state=42)
+        print("Neural t-SNE manifold shape:", n_tsne_manifold.shape)
 
-    n_umap_manifold = perform_manifold_learning(n_state_matrix, method='umap', n_components=3, random_state=42)
-    print("Neural UMAP manifold shape:", n_umap_manifold.shape)
+        n_umap_manifold = perform_manifold_learning(n_state_matrix, method='umap', n_components=3, random_state=42)
+        print("Neural UMAP manifold shape:", n_umap_manifold.shape)
 
-    n_pca_manifold = perform_manifold_learning(n_state_matrix, method='pca', n_components=3, random_state=42)
-    print("Neural PCA manifold shape:", n_pca_manifold.shape)
-    
-    plot_manifold_raw(
-        n_tsne_manifold,
-        manifold_type="t-SNE",
-        state_keys=neural_keys,
-        state_type="neural states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=False,
-        show_all_points=True,
-        show_top3=True
-    )
+        n_pca_manifold = perform_manifold_learning(n_state_matrix, method='pca', n_components=3, random_state=42)
+        print("Neural PCA manifold shape:", n_pca_manifold.shape)
+        
+        plot_manifold_raw_two_route(
+            n_tsne_manifold,
+            manifold_type="t-SNE",
+            state_keys=neural_keys,
+            state_type="neural states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    plot_manifold_raw(
-        n_umap_manifold,
-        manifold_type="UMAP",
-        state_keys=neural_keys,
-        state_type="neural states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=False,
-        show_all_points=True,
-        show_top3=True
-    )
+        plot_manifold_raw_two_route(
+            n_umap_manifold,
+            manifold_type="UMAP",
+            state_keys=neural_keys,
+            state_type="neural states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
 
-    plot_manifold_raw(
-        n_pca_manifold,
-        manifold_type="PCA",
-        state_keys=neural_keys,
-        state_type="neural states",
-        route_sequence=route,
-        top3_route_history=top3_route_history,
-        save_path=None,
-        show_route_line=False,
-        show_all_points=True,
-        show_top3=True
-    )
-    
+        plot_manifold_raw_two_route(
+            n_pca_manifold,
+            manifold_type="PCA",
+            state_keys=neural_keys,
+            state_type="neural states",
+            route_sequence=route,
+            top3_route_history=top3_route_history,
+            save_prefix=None,
+            show_all_points=True,
+            make_full_plot=True,
+            make_zoomed_plot=False,
+            zoom_padding_fraction=0.12,
+            zoom_percentile=0,
+            visual_offset_fraction=0.018,
+            full_background_alpha=0.20,
+            zoom_background_alpha=0.08,
+            full_background_point_size=9,
+            zoom_background_point_size=6
+        )
+    else: raise ValueError("test value not an accepted dictionary")
+
+
     '''
     plot_manifold_trisurf_raw(
         n_tsne_manifold,
