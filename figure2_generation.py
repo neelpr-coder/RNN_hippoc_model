@@ -2331,7 +2331,7 @@ if __name__ == "__main__":
     )'''
     pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, all_visit_count_b_dict_100, all_visit_count_n_dict_100 = generate_dicts(model)
     #pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
-
+    #pair_transition_dict_75, behavioral_transistion_dict_75, neural_state_dict_75, _, _ = generate_dicts(model, min_visits=75)
     '''shared_route_sequence = generate_supported_observed_pair_route(
         pair_transition_dict_100,
         neural_state_dict_100,
@@ -2364,6 +2364,8 @@ if __name__ == "__main__":
 
     _, route100, error_history_100 = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_animation_min100.mp4")
     np.save(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), np.array(route100, dtype=object), allow_pickle=True)
+
+    #np.save(os.path.join(SCRIPT_DIR, "error_history_min100.npy"), np.array(error_history_100, dtype=object), allow_pickle=True)
 
     top3_route_history_100 = save_top3_route_transitions(route100, behavioral_transition_dict_100, neural_state_dict_100, pair_transition_dict_100, top_k=3)
 

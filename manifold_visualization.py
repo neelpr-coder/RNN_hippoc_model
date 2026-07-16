@@ -5,9 +5,8 @@ import numpy as np
 import os 
 from collections import defaultdict
 import matplotlib.pyplot as plt
-from scipy.spatial import cKDTree
-import matplotlib.tri as mtri
-from collections import Counter
+import figure2_generation
+from matplotlib.lines import Line2D
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -646,509 +645,796 @@ def plot_manifold_raw_two_route(
 
         plt.show()
 
-def filter_long_triangles(triangulation, points_2d, max_edge_length=None, scale=3.0):
-    """
-    Masks triangles with overly long edges.
 
-    This does not move points or smooth data.
-    It only removes triangle connections that span large gaps.
-    """
-    triangles = triangulation.triangles
-    keep = []
 
-    if max_edge_length is None:
-        tree = cKDTree(points_2d)
-        dists, _ = tree.query(points_2d, k=2)
-        nearest_neighbor_dists = dists[:, 1]
-
-        max_edge_length = np.percentile(nearest_neighbor_dists, 90) * scale
-
-    for tri in triangles:
-        p0, p1, p2 = points_2d[tri]
-
-        e01 = np.linalg.norm(p0 - p1)
-        e12 = np.linalg.norm(p1 - p2)
-        e20 = np.linalg.norm(p2 - p0)
-
-        if max(e01, e12, e20) <= max_edge_length:
-            keep.append(True)
-        else:
-            keep.append(False)
-
-    triangulation.set_mask(~np.array(keep))
-    return triangulation
-
-def plot_manifold_trisurf_raw(
-    manifold,
-    manifold_type,
-    state_keys,
-    state_type,
+def build_top1_predicted_path_from_route(
     route_sequence,
-    top3_route_history=None,
-    save_path=None,
-    show_points=True,
-    show_route_line=True,
-    show_top3=True,
-    all_points_color="blue",
-    route_color="red",
-    top3_color="green",
-    surface_color="lightgray",
-    point_size=10,
-    route_point_size=10,
-    top3_point_size=16,
-    all_points_alpha=0.12,
-    route_points_alpha=0.95,
-    top3_points_alpha=0.80,
-    top3_line_alpha=0.55,
-    surface_alpha=0.28,
-    surface_linewidth=0.15,
-    route_linewidth=1.2,
-    top3_linewidth=0.9,
-    max_edge_length=None
+    b_transition_dict,
+    neural_state_dict,
+    pair_transition_dict,
+    state_type
 ):
     """
-    Raw triangulated 3D manifold plot with filtered triangles.
-
-    Blue = all states
-    Red = actual animation route
-    Green = exact top-3 transitions saved from the animation
+    Builds the top-1 highest-probability predicted route from the dictionary. Time frame aligned. 
     """
 
-    state_path = extract_state_path_from_route(route_sequence, state_type)
+    actual_state_path = extract_state_path_from_route(route_sequence, state_type)
 
-    hashable_state_keys = [
-        make_hashable_state(key)
-        for key in state_keys
-    ]
+    if len(actual_state_path) == 0:
+        raise ValueError("Actual state path is empty.")
+
+    predicted_state_path = [actual_state_path[0]]
+
+    for frame_idx, (B0, N0, B1, N1, observed_count) in enumerate(route_sequence):
+
+        if state_type == "neural states":
+            next_dict = neural_state_dict.get(N0, {})
+
+        elif state_type == "behavioral states":
+            next_dict = b_transition_dict.get(B0, {})
+
+        elif state_type == "joint states":
+            next_dict = pair_transition_dict.get((B0, N0), {})
+
+        else:
+            raise ValueError(
+                "Unsupported state_type. Use 'neural states', "
+                "'behavioral states', or 'joint states'."
+            )
+
+        if len(next_dict) == 0:
+            raise ValueError(
+                f"No predicted transitions found at frame {frame_idx + 1} "
+                f"for state_type={state_type}."
+            )
+
+        # Highest count = highest transition probability.
+        top1_target = max(next_dict.items(), key=lambda item: item[1])[0]
+
+        predicted_state_path.append(top1_target)
+
+    return predicted_state_path
+
+
+
+REDUCTION_LABELS = {
+    "tsne": "t-SNE",
+    "umap": "UMAP",
+    "pca": "PCA"
+}
+
+
+def get_dictionary_plot_config(dictionary_name):
+    """
+    Maps a simple dictionary name to the state_type and dict_type
+
+    dictionary_name options:
+        "neural"
+        "behavioral"
+        "paired"
+    """
+
+    if dictionary_name == "neural":
+        return {
+            "state_type": "neural states",
+            "dict_type": "neural_state",
+            "display_name": "Neural"
+        }
+
+    elif dictionary_name == "behavioral":
+        return {
+            "state_type": "behavioral states",
+            "dict_type": "behavioral_state",
+            "display_name": "Behavioral"
+        }
+
+    elif dictionary_name == "paired":
+        return {
+            "state_type": "joint states",
+            "dict_type": "paired_transition",
+            "display_name": "Paired"
+        }
+
+    else:
+        raise ValueError("dictionary_name must be 'neural', 'behavioral', or 'paired'.")
+
+
+def select_transition_dict(
+    dictionary_name,
+    neural_state_dict,
+    behavioral_state_dict,
+    pair_transition_dict
+):
+    """
+    Selects the dictionary that should be embedded/plotted.
+    """
+
+    if dictionary_name == "neural":
+        return neural_state_dict
+
+    elif dictionary_name == "behavioral":
+        return behavioral_state_dict
+
+    elif dictionary_name == "paired":
+        return pair_transition_dict
+
+    else:
+        raise ValueError("dictionary_name must be 'neural', 'behavioral', or 'paired'.")
+
+
+def extract_error_values(error_history, error_key="raw_error"):
+    """
+    Converts error_history from evaluate_error_history_on_fixed_route(...) into an array
+    """
+
+    values = []
+
+    for item in error_history:
+        if isinstance(item, dict):
+            if error_key in item:
+                values.append(item[error_key])
+            elif "error" in item:
+                values.append(item["error"])
+            else:
+                raise KeyError(
+                    f"Could not find '{error_key}' or 'error' in error_history item: {item}"
+                )
+        else:
+            values.append(float(item))
+
+    return np.array(values, dtype=float)
+
+
+def path_to_coords(state_path, state_keys, manifold):
+    """
+    Converts a state path into manifold coordinates.
+
+    Missing states are represented by NaN rows so matplotlib breaks the line cleanly.
+    """
 
     key_to_idx = {
-        key: i
-        for i, key in enumerate(hashable_state_keys)
+        make_hashable_state(key): idx
+        for idx, key in enumerate(state_keys)
     }
 
-    # -------------------------
-    # Actual route lookup
-    # -------------------------
-    route_indices = []
-    missing_route = 0
+    coords = np.full((len(state_path), 3), np.nan, dtype=float)
+    missing_count = 0
 
-    for state in state_path:
+    for i, state in enumerate(state_path):
         h_state = make_hashable_state(state)
 
         if h_state in key_to_idx:
-            route_indices.append(key_to_idx[h_state])
+            coords[i] = manifold[key_to_idx[h_state]]
         else:
-            missing_route += 1
+            missing_count += 1
 
-    if len(route_indices) == 0:
-        raise ValueError(f"No route {state_type} matched manifold keys.")
+    return coords, missing_count
 
-    route_coords = manifold[route_indices]
 
-    print(f"Exact route {state_type} found: {len(route_indices)}/{len(state_path)}")
-    print(f"Missing route {state_type}: {missing_route}")
-    print(
-        f"Unique route {state_type}:",
-        len(set(make_hashable_state(s) for s in state_path))
+def plot_manifold_panel_on_axis(
+    ax,
+    manifold,
+    state_keys,
+    route_sequence,
+    neural_state_dict,
+    behavioral_state_dict,
+    pair_transition_dict,
+    dictionary_name,
+    reduction_method,
+    min_visits,
+    elev=24,
+    azim=-60
+):
+    """
+    Draws one manifold panel inside a collage.
+    """
+
+    config = get_dictionary_plot_config(dictionary_name)
+    state_type = config["state_type"]
+    display_name = config["display_name"]
+    reduction_label = REDUCTION_LABELS[reduction_method]
+
+    actual_state_path = extract_state_path_from_route(
+        route_sequence,
+        state_type=state_type
     )
 
-    # -------------------------
-    # Top-3 animation transitions
-    # -------------------------
-    top3_edges = []
-    top3_target_indices = set()
-    missing_top3_current = 0
-    missing_top3_targets = 0
-
-    if show_top3 and top3_route_history is not None:
-        for frame_info in top3_route_history:
-            current_state, target_states = get_top3_current_and_targets(
-                frame_info,
-                state_type
-            )
-
-            h_current = make_hashable_state(current_state)
-
-            if h_current not in key_to_idx:
-                missing_top3_current += 1
-                continue
-
-            current_idx = key_to_idx[h_current]
-            current_coord = manifold[current_idx]
-
-            for target_state in target_states:
-                h_target = make_hashable_state(target_state)
-
-                if h_target in key_to_idx:
-                    target_idx = key_to_idx[h_target]
-                    target_coord = manifold[target_idx]
-
-                    top3_edges.append((current_coord, target_coord))
-                    top3_target_indices.add(target_idx)
-                else:
-                    missing_top3_targets += 1
-
-        print(f"Top-3 animation transition edges found: {len(top3_edges)}")
-        print(f"Missing top-3 current states: {missing_top3_current}")
-        print(f"Missing top-3 target states: {missing_top3_targets}")
-
-    # -------------------------
-    # Triangulation
-    # -------------------------
-    x = manifold[:, 0]
-    y = manifold[:, 1]
-    z = manifold[:, 2]
-
-    points_2d = manifold[:, :2]
-
-    triangulation = mtri.Triangulation(x, y)
-    triangulation = filter_long_triangles(
-        triangulation,
-        points_2d,
-        max_edge_length=max_edge_length
+    predicted_state_path = build_top1_predicted_path_from_route(
+        route_sequence=route_sequence,
+        b_transition_dict=behavioral_state_dict,
+        neural_state_dict=neural_state_dict,
+        pair_transition_dict=pair_transition_dict,
+        state_type=state_type
     )
 
-    # -------------------------
-    # Plot
-    # -------------------------
-    fig = plt.figure(figsize=(11, 9))
-    ax = fig.add_subplot(111, projection="3d")
-
-    # Raw triangulated manifold surface
-    ax.plot_trisurf(
-        triangulation,
-        z,
-        color=surface_color,
-        alpha=surface_alpha,
-        linewidth=surface_linewidth,
-        edgecolor="gray"
+    actual_coords, missing_actual = path_to_coords(
+        actual_state_path,
+        state_keys,
+        manifold
     )
 
-    # Optional raw manifold points
-    if show_points:
-        ax.scatter(
-            x,
-            y,
-            z,
-            s=point_size,
-            color=all_points_color,
-            alpha=all_points_alpha,
-            label=f"All {state_type}"
-        )
+    predicted_coords, missing_predicted = path_to_coords(
+        predicted_state_path,
+        state_keys,
+        manifold
+    )
 
-    # Green top-3 transitions first
-    if show_top3 and top3_route_history is not None:
-        for start_coord, end_coord in top3_edges:
-            ax.plot(
-                [start_coord[0], end_coord[0]],
-                [start_coord[1], end_coord[1]],
-                [start_coord[2], end_coord[2]],
-                color=top3_color,
-                linewidth=top3_linewidth,
-                alpha=top3_line_alpha,
-                zorder=7
-            )
+    n_frames = min(len(actual_state_path), len(predicted_state_path))
 
-        if len(top3_target_indices) > 0:
-            top3_coords = manifold[list(top3_target_indices)]
+    actual_hashable = [
+        make_hashable_state(state)
+        for state in actual_state_path[:n_frames]
+    ]
 
-            ax.scatter(
-                top3_coords[:, 0],
-                top3_coords[:, 1],
-                top3_coords[:, 2],
-                s=top3_point_size,
-                color=top3_color,
-                alpha=top3_points_alpha,
-                label="Top 3 animation transition targets",
-                zorder=8
-            )
+    predicted_hashable = [
+        make_hashable_state(state)
+        for state in predicted_state_path[:n_frames]
+    ]
 
-    # Exact route points
+    actual_valid = ~np.isnan(actual_coords[:n_frames]).any(axis=1)
+    predicted_valid = ~np.isnan(predicted_coords[:n_frames]).any(axis=1)
+
+    same_frame_mask = np.array(
+        [
+            actual_hashable[i] == predicted_hashable[i]
+            for i in range(n_frames)
+        ],
+        dtype=bool
+    )
+
+    same_frame_mask = same_frame_mask & actual_valid & predicted_valid
+
+    actual_only_mask = actual_valid & (~same_frame_mask)
+    predicted_only_mask = predicted_valid & (~same_frame_mask)
+
+    same_count = int(np.sum(same_frame_mask))
+
+    # Colors
+    all_state_color = "gray"
+    actual_line_color = "crimson"
+    predicted_line_color = "deepskyblue"
+    actual_point_color = "crimson"
+    predicted_point_color = "deepskyblue"
+    same_point_color = "gold"
+
+    ax.set_proj_type("ortho")
+
+    # All manifold states
     ax.scatter(
-        route_coords[:, 0],
-        route_coords[:, 1],
-        route_coords[:, 2],
-        s=route_point_size,
-        color=route_color,
-        alpha=route_points_alpha,
-        label=f"Animation-route {state_type}",
-        zorder=10
+        manifold[:, 0],
+        manifold[:, 1],
+        manifold[:, 2],
+        s=8,
+        color=all_state_color,
+        alpha=0.20,
+        depthshade=False
     )
 
-    # Exact route line
-    if show_route_line:
-        ax.plot(
-            route_coords[:, 0],
-            route_coords[:, 1],
-            route_coords[:, 2],
-            color=route_color,
-            linewidth=route_linewidth,
-            alpha=0.85,
-            zorder=9
+    # Actual route
+    ax.plot(
+        actual_coords[:, 0],
+        actual_coords[:, 1],
+        actual_coords[:, 2],
+        color=actual_line_color,
+        linewidth=2.0,
+        alpha=0.80
+    )
+
+    # Predicted route
+    ax.plot(
+        predicted_coords[:, 0],
+        predicted_coords[:, 1],
+        predicted_coords[:, 2],
+        color=predicted_line_color,
+        linewidth=2.0,
+        linestyle="--",
+        alpha=0.95
+    )
+
+    # Actual-only points
+    actual_only_coords = actual_coords[:n_frames][actual_only_mask]
+
+    if len(actual_only_coords) > 0:
+        ax.scatter(
+            actual_only_coords[:, 0],
+            actual_only_coords[:, 1],
+            actual_only_coords[:, 2],
+            s=42,
+            color=actual_point_color,
+            marker="o",
+            alpha=0.95,
+            depthshade=False,
+            zorder=10
         )
+
+    # Predicted-only points
+    predicted_only_coords = predicted_coords[:n_frames][predicted_only_mask]
+
+    if len(predicted_only_coords) > 0:
+        ax.scatter(
+            predicted_only_coords[:, 0],
+            predicted_only_coords[:, 1],
+            predicted_only_coords[:, 2],
+            s=58,
+            color=predicted_point_color,
+            marker="^",
+            alpha=0.95,
+            depthshade=False,
+            zorder=11
+        )
+
+    # Same-frame points
+    same_coords = actual_coords[:n_frames][same_frame_mask]
+
+    if len(same_coords) > 0:
+        ax.scatter(
+            same_coords[:, 0],
+            same_coords[:, 1],
+            same_coords[:, 2],
+            s=82,
+            color=same_point_color,
+            edgecolor="black",
+            linewidth=0.8,
+            marker="o",
+            alpha=0.98,
+            depthshade=False,
+            zorder=12
+        )
+
+    # Keep only min visits in the per-panel title
+    ax.set_title(
+        f"{reduction_label}, min visits = {min_visits}",
+        fontsize=16,
+        pad=16
+    )
+
+    ax.set_xlabel(f"{reduction_label} 1", fontsize=10, labelpad=7)
+    ax.set_ylabel(f"{reduction_label} 2", fontsize=10, labelpad=7)
+    ax.set_zlabel(f"{reduction_label} 3", fontsize=10, labelpad=7)
+
+    ax.view_init(elev=elev, azim=azim)
+
+    # Full manifold limits
+    mins = manifold.min(axis=0)
+    maxs = manifold.max(axis=0)
+    ranges = maxs - mins
+    pad = 0.08 * np.maximum(ranges, 1e-8)
+
+    ax.set_xlim(mins[0] - pad[0], maxs[0] + pad[0])
+    ax.set_ylim(mins[1] - pad[1], maxs[1] + pad[1])
+    ax.set_zlim(mins[2] - pad[2], maxs[2] + pad[2])
+
+    if reduction_label == "PCA":
+        ax.set_box_aspect((1.35, 1.15, 0.85))
+    else:
+        ax.set_box_aspect((1.2, 1.1, 0.95))
+
+    print(
+        f"{display_name} | {reduction_label} | min visits {min_visits}: "
+        f"same-frame matches = {same_count}/{n_frames}, "
+        f"missing actual = {missing_actual}, missing predicted = {missing_predicted}"
+    )
+
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=all_state_color,
+            alpha=0.35,
+            markersize=5,
+            label=f"All {display_name.lower()} states"
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=actual_line_color,
+            linewidth=2.0,
+            label="Actual predetermined route"
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=predicted_line_color,
+            linewidth=2.0,
+            linestyle="--",
+            label="Highest-probability predicted route"
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=actual_point_color,
+            markeredgecolor=actual_point_color,
+            markersize=7,
+            label="Actual route only"
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="^",
+            color="w",
+            markerfacecolor=predicted_point_color,
+            markeredgecolor=predicted_point_color,
+            markersize=8,
+            label="Predicted route only"
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=same_point_color,
+            markeredgecolor="black",
+            markersize=9,
+            label=f"Same state at same frame ({same_count}/{n_frames})"
+        )
+    ]
+
+    return legend_handles
+
+
+def plot_error_panel_on_axis(
+    ax,
+    error_values,
+    min_visits,
+    y_limits=None
+):
+    """
+    Draws one clean error-vs-time-frame panel below the manifold.
+    """
+
+    frames = np.arange(1, len(error_values) + 1)
+
+    ax.plot(
+        frames,
+        error_values,
+        color="black",
+        linewidth=1.2,
+        marker="o",
+        markersize=2.4
+    )
 
     ax.set_title(
-        f"Raw 3D {manifold_type} {state_type} surface\n"
-        f"Actual Route vs Top 3 Animation Transitions"
+        f"Error vs Time Frame, min visits = {min_visits}",
+        fontsize=10
     )
-    ax.set_xlabel(f"{manifold_type} 1")
-    ax.set_ylabel(f"{manifold_type} 2")
-    ax.set_zlabel(f"{manifold_type} 3")
 
-    ax.legend(loc="upper right")
-    plt.tight_layout()
+    ax.set_xlabel("Frame", fontsize=9)
+    ax.set_ylabel("Error", fontsize=9)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.grid(True, alpha=0.25)
+
+    if y_limits is not None:
+        ax.set_ylim(y_limits)
+
+
+def create_reduction_epoch_collage(
+    dictionary_name,
+    reduction_method,
+    min_visits_list=(50, 75, 100),
+    max_visits=151,
+    sd=42,
+    bin_size=0.5,
+    route_min_visits=100,
+    error_key="raw_error",
+    save_path=None,
+    show=True
+):
+    """
+    Creates one collage.
+    """
+
+    config = get_dictionary_plot_config(dictionary_name)
+    state_type = config["state_type"]
+    dict_type = config["dict_type"]
+    display_name = config["display_name"]
+    reduction_label = REDUCTION_LABELS[reduction_method]
+
+    route_sequence = np.load(
+        os.path.join(SCRIPT_DIR, f"route_sequence_min{route_min_visits}.npy"),
+        allow_pickle=True
+    )
+
+    panel_data = []
+    all_error_values = []
+
+    # --------------------------------------------------
+    # First pass: compute manifolds and error histories
+    # --------------------------------------------------
+    for min_visits in min_visits_list:
+        neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(
+            min_visits=min_visits,
+            max_visits=max_visits,
+            sd=sd,
+            bin_size=bin_size
+        )
+
+        transition_dict = select_transition_dict(
+            dictionary_name,
+            neural_state_dict,
+            behavioral_state_dict,
+            pair_transition_dict
+        )
+
+        matrix, state_keys = convert_dict_to_matrix(
+            transition_dict,
+            dict_type=dict_type
+        )
+
+        print(
+            f"{display_name} {reduction_label}, min visits {min_visits}: "
+            f"matrix shape = {matrix.shape}"
+        )
+
+        manifold = perform_manifold_learning(
+            matrix,
+            method=reduction_method,
+            n_components=3,
+            random_state=42
+        )
+
+        error_history = figure2_generation.evaluate_error_history_on_fixed_route(
+            route_sequence=route_sequence,
+            b_transition_dict=behavioral_state_dict,
+            neural_state_dict=neural_state_dict,
+            pair_transition_dict=pair_transition_dict,
+            top_k=3,
+            apply_top3_filter=False
+        )
+
+        error_values = extract_error_values(
+            error_history,
+            error_key=error_key
+        )
+
+        all_error_values.append(error_values)
+
+        panel_data.append({
+            "min_visits": min_visits,
+            "neural_state_dict": neural_state_dict,
+            "behavioral_state_dict": behavioral_state_dict,
+            "pair_transition_dict": pair_transition_dict,
+            "state_keys": state_keys,
+            "manifold": manifold,
+            "error_values": error_values
+        })
+
+    # Shared y-axis range for the three error plots
+    concatenated_errors = np.concatenate(all_error_values)
+
+    y_min = float(np.min(concatenated_errors))
+    y_max = float(np.max(concatenated_errors))
+
+    if np.isclose(y_min, y_max):
+        y_pad = 1e-3
+    else:
+        y_pad = 0.12 * (y_max - y_min)
+
+    y_limits = (y_min - y_pad, y_max + y_pad)
+
+    # --------------------------------------------------
+    # Build collage figure
+    # --------------------------------------------------
+    fig = plt.figure(figsize=(22, 10))
+
+    grid = fig.add_gridspec(
+        2,
+        3,
+        height_ratios=[4.7, 1.35],
+        hspace=0.18,
+        wspace=0.16
+    )
+
+    shared_legend_handles = None
+
+    for col, data in enumerate(panel_data):
+        min_visits = data["min_visits"]
+
+        ax_manifold = fig.add_subplot(grid[0, col], projection="3d")
+
+        legend_handles = plot_manifold_panel_on_axis(
+            ax=ax_manifold,
+            manifold=data["manifold"],
+            state_keys=data["state_keys"],
+            route_sequence=route_sequence,
+            neural_state_dict=data["neural_state_dict"],
+            behavioral_state_dict=data["behavioral_state_dict"],
+            pair_transition_dict=data["pair_transition_dict"],
+            dictionary_name=dictionary_name,
+            reduction_method=reduction_method,
+            min_visits=min_visits
+        )
+
+        if shared_legend_handles is None:
+            shared_legend_handles = legend_handles
+
+        ax_error = fig.add_subplot(grid[1, col])
+
+        plot_error_panel_on_axis(
+            ax=ax_error,
+            error_values=data["error_values"],
+            min_visits=min_visits,
+            y_limits=y_limits
+        )
+
+    fig.suptitle(
+        f"{display_name} dictionary trajectories across epochs — {reduction_label}",
+        fontsize=20,
+        y=0.96
+    )
+
+    fig.legend(
+        handles=shared_legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.925),
+        ncol=6,
+        fontsize=10,
+        frameon=True
+    )
+
+    plt.subplots_adjust(
+        left=0.04,
+        right=0.98,
+        top=0.84,
+        bottom=0.08
+    )
 
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved collage: {save_path}")
 
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
-if __name__ == '__main__':
-    neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(min_visits=100, max_visits=151, sd=42, bin_size=0.5)
 
-    route = np.load(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), allow_pickle=True)
+def generate_all_dictionary_collages(
+    dictionary_names=("neural", "behavioral", "paired"),
+    reduction_methods=("tsne", "umap", "pca"),
+    min_visits_list=(50, 75, 100),
+    max_visits=151,
+    sd=42,
+    bin_size=0.5,
+    route_min_visits=100,
+    error_key="raw_error",
+    save_dir=None,
+    show=True
+):
+    """
+    Generates all collages.
+    3 dictionaries x 3 reduction techniques
+    """
 
-    top3_route_history = np.load(os.path.join(SCRIPT_DIR, "top3_route_transitions_min100.npy"), allow_pickle=True).tolist()
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
 
-    test_dictionary_manifold = "neural"
+    for dictionary_name in dictionary_names:
+        for reduction_method in reduction_methods:
+            save_path = None
 
-    if test_dictionary_manifold == "joint":
-        paired_matrix, paired_keys = convert_dict_to_matrix(pair_transition_dict, dict_type='paired_transition')
-        print("Paired transition matrix shape:", paired_matrix.shape)
+            if save_dir is not None:
+                save_path = os.path.join(
+                    save_dir,
+                    f"{dictionary_name}_{reduction_method}_epochs_50_75_100_clean_collage.png"
+                )
 
-        paired_tsne_manifold = perform_manifold_learning(paired_matrix, method='tsne', n_components=3, random_state=42)
-        print("Paired transition t-SNE manifold shape:", paired_tsne_manifold.shape)
+            create_reduction_epoch_collage(
+                dictionary_name=dictionary_name,
+                reduction_method=reduction_method,
+                min_visits_list=min_visits_list,
+                max_visits=max_visits,
+                sd=sd,
+                bin_size=bin_size,
+                route_min_visits=route_min_visits,
+                error_key=error_key,
+                save_path=save_path,
+                show=show
+            )
 
-        paired_umap_manifold = perform_manifold_learning(paired_matrix, method='umap', n_components=3, random_state=42)
-        print("Paired transition UMAP manifold shape:", paired_umap_manifold.shape)
 
-        paired_pca_manifold = perform_manifold_learning(paired_matrix, method='pca', n_components=3, random_state=42)
-        print("Paired transition PCA manifold shape:", paired_pca_manifold.shape)
 
-        plot_manifold_raw_two_route(
-            paired_tsne_manifold,
-            manifold_type="t-SNE",
-            state_keys=paired_keys,
-            state_type="joint states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
+if __name__ == "__main__":
+    RUN_COLLAGES = True
+    RUN_SINGLE_PLOTS_WITHOUT_INSETS = False
+
+
+    MIN_VISITS_LIST = (50, 75, 100)
+    REDUCTION_METHODS = ("tsne", "umap", "pca")
+    DICTIONARY_NAMES = ("neural", "behavioral", "paired")
+
+    MAX_VISITS = 151
+    SD = 42
+    BIN_SIZE = 0.5
+
+  
+    ROUTE_MIN_VISITS = 100
+
+    ERROR_KEY = "raw_error"
+
+    COLLAGE_SAVE_DIR = None #os.path.join(SCRIPT_DIR, "clean_epoch_collages")
+
+    if RUN_COLLAGES:
+        generate_all_dictionary_collages(
+            dictionary_names=DICTIONARY_NAMES,
+            reduction_methods=REDUCTION_METHODS,
+            min_visits_list=MIN_VISITS_LIST,
+            max_visits=MAX_VISITS,
+            sd=SD,
+            bin_size=BIN_SIZE,
+            route_min_visits=ROUTE_MIN_VISITS,
+            error_key=ERROR_KEY,
+            save_dir=COLLAGE_SAVE_DIR,
+            show=True
         )
 
-        plot_manifold_raw_two_route(
-            paired_umap_manifold,
-            manifold_type="UMAP",
-            state_keys=paired_keys,
-            state_type="joint states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
+    if RUN_SINGLE_PLOTS_WITHOUT_INSETS:
+        SINGLE_DICTIONARY_TO_PLOT = "neural"
+        SINGLE_MIN_VISITS = 100
+
+        config = get_dictionary_plot_config(SINGLE_DICTIONARY_TO_PLOT)
+
+        state_type = config["state_type"]
+        dict_type = config["dict_type"]
+
+        neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(
+            min_visits=SINGLE_MIN_VISITS,
+            max_visits=MAX_VISITS,
+            sd=SD,
+            bin_size=BIN_SIZE
         )
 
-        plot_manifold_raw_two_route(
-            paired_pca_manifold,
-            manifold_type="PCA",
-            state_keys=paired_keys,
-            state_type="joint states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
-        )
-    elif test_dictionary_manifold == 'behavioral':
-        b_state_matrix, behavioral_keys = convert_dict_to_matrix(behavioral_state_dict, dict_type='behavioral_state')
-        print("Behavioral state matrix shape:", b_state_matrix.shape)
-
-        b_tsne_manifold = perform_manifold_learning(b_state_matrix, method='tsne', n_components=3, random_state=42)
-        print("Behavioral t-SNE manifold shape:", b_tsne_manifold.shape)
-
-        b_umap_manifold = perform_manifold_learning(b_state_matrix, method='umap', n_components=3, random_state=42)
-        print("Behavioral UMAP manifold shape:", b_umap_manifold.shape)
-
-        b_pca_manifold = perform_manifold_learning(b_state_matrix, method='pca', n_components=3, random_state=42)
-        print("Behavioral PCA manifold shape:", b_pca_manifold.shape)
-
-        plot_manifold_raw_two_route(
-            b_tsne_manifold,
-            manifold_type="t-SNE",
-            state_keys=behavioral_keys,
-            state_type="behavioral states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.18,
-            zoom_percentile=5,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
+        transition_dict = select_transition_dict(
+            SINGLE_DICTIONARY_TO_PLOT,
+            neural_state_dict,
+            behavioral_state_dict,
+            pair_transition_dict
         )
 
-        plot_manifold_raw_two_route(
-            b_umap_manifold,
-            manifold_type="UMAP",
-            state_keys=behavioral_keys,
-            state_type="behavioral states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.18,
-            zoom_percentile=5,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
+        matrix, state_keys = convert_dict_to_matrix(
+            transition_dict,
+            dict_type=dict_type
         )
 
-        plot_manifold_raw_two_route(
-            b_pca_manifold,
-            manifold_type="PCA",
-            state_keys=behavioral_keys,
-            state_type="behavioral states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.18,
-            zoom_percentile=5,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
-        )
-    elif test_dictionary_manifold == "neural":
-        n_state_matrix, neural_keys = convert_dict_to_matrix(neural_state_dict, dict_type='neural_state')
-        print("Neural state matrix shape:", n_state_matrix.shape)
-
-
-        n_tsne_manifold = perform_manifold_learning(n_state_matrix, method='tsne', n_components=3, random_state=42)
-        print("Neural t-SNE manifold shape:", n_tsne_manifold.shape)
-
-        n_umap_manifold = perform_manifold_learning(n_state_matrix, method='umap', n_components=3, random_state=42)
-        print("Neural UMAP manifold shape:", n_umap_manifold.shape)
-
-        n_pca_manifold = perform_manifold_learning(n_state_matrix, method='pca', n_components=3, random_state=42)
-        print("Neural PCA manifold shape:", n_pca_manifold.shape)
-        
-        plot_manifold_raw_two_route(
-            n_tsne_manifold,
-            manifold_type="t-SNE",
-            state_keys=neural_keys,
-            state_type="neural states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
+        route = np.load(
+            os.path.join(SCRIPT_DIR, f"route_sequence_min{ROUTE_MIN_VISITS}.npy"),
+            allow_pickle=True
         )
 
-        plot_manifold_raw_two_route(
-            n_umap_manifold,
-            manifold_type="UMAP",
-            state_keys=neural_keys,
-            state_type="neural states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
-        )
+        top3_route_history = np.load(
+            os.path.join(SCRIPT_DIR, f"top3_route_transitions_min{ROUTE_MIN_VISITS}.npy"),
+            allow_pickle=True
+        ).tolist()
 
-        plot_manifold_raw_two_route(
-            n_pca_manifold,
-            manifold_type="PCA",
-            state_keys=neural_keys,
-            state_type="neural states",
-            route_sequence=route,
-            top3_route_history=top3_route_history,
-            save_prefix=None,
-            show_all_points=True,
-            make_full_plot=True,
-            make_zoomed_plot=False,
-            zoom_padding_fraction=0.12,
-            zoom_percentile=0,
-            visual_offset_fraction=0.018,
-            full_background_alpha=0.20,
-            zoom_background_alpha=0.08,
-            full_background_point_size=9,
-            zoom_background_point_size=6
-        )
-    else: raise ValueError("test value not an accepted dictionary")
+        for method in REDUCTION_METHODS:
+            method_label = REDUCTION_LABELS[method]
 
+            manifold = perform_manifold_learning(
+                matrix,
+                method=method,
+                n_components=3,
+                random_state=42
+            )
 
-    '''
-    plot_manifold_trisurf_raw(
-        n_tsne_manifold,
-        neural_keys,
-        route_sequence=route,
-        save_path=None,
-        show_points=True,
-        show_route_line=True,
-        all_points_color="blue",
-        route_color="red",
-        surface_color="blue",
-        point_size=10,
-        route_point_size=30,
-        all_points_alpha=0.65,
-        route_points_alpha=0.95,
-        surface_alpha=0.65,
-        surface_linewidth=0.3,
-        route_linewidth=1.0,
-        max_edge_length=1
-    )'''
+            plot_manifold_raw_two_route(
+                manifold,
+                manifold_type=method_label,
+                state_keys=state_keys,
+                state_type=state_type,
+                route_sequence=route,
+                top3_route_history=top3_route_history,
+                save_prefix=None,
+                show_all_points=True,
+                make_full_plot=True,
+                make_zoomed_plot=False,
+                zoom_padding_fraction=0.12,
+                zoom_percentile=0,
+                visual_offset_fraction=0.018,
+                full_background_alpha=0.20,
+                zoom_background_alpha=0.08,
+                full_background_point_size=9,
+                zoom_background_point_size=6
+            )
