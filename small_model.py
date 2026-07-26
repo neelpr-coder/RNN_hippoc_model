@@ -29,7 +29,15 @@ class RNN(nn.Module):
                 device=X.device, dtype=X.dtype
             )
 
-        out, h_next = self.rnn(X, h_prev)
+        _, h_next = self.rnn(X, h_prev)
 
         neural_state = h_next[-1, 0, :]   # shape: (hidden_size,)
         return neural_state, h_next
+    
+def knockout_neuron(index):
+    def knockout_hook(module, input, output):
+        rnn_output, h_last = output
+        rnn_output[:,:,index] = 0.0
+        h_last[:, :, index] = 0.0
+        return h_last
+    return knockout_hook
