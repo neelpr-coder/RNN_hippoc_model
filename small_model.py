@@ -34,10 +34,14 @@ class RNN(nn.Module):
         neural_state = h_next[-1, 0, :]   # shape: (hidden_size,)
         return neural_state, h_next
     
-def knockout_neuron(index):
-    def knockout_hook(module, input, output):
-        rnn_output, h_last = output
-        rnn_output[:,:,index] = 0.0
-        h_last[:, :, index] = 0.0
-        return h_last
-    return knockout_hook
+    def knockout_neuron(self, index):
+        def knockout_hook(module, input, output):
+            rnn_output, h_last = output
+
+            perturbed_output = rnn_output.clone()
+            perturbed_h_last = h_last.clone()
+
+            perturbed_output[:,:,index] = 0.0
+            perturbed_h_last[:, :, index] = 0.0
+            return perturbed_output, perturbed_h_last
+        return self.rnn.register_forward_hook(knockout_hook)

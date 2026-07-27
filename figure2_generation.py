@@ -210,9 +210,9 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.5)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.5)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
 
                     all_visit_count_n_dict[cur_neural_state_key] += 1
@@ -242,10 +242,10 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.5)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
 
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.5)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
                     
                     all_visit_count_n_dict[cur_neural_state_key] += 1
