@@ -594,6 +594,7 @@ def dynamic_degeneracy_probability(pair_transition_dict, num_steps=2, gen_JSON =
 
     return scores_b_to_n, scores_n_to_b
 
+
 def sweep_data_gen(net, step_size=5, min_attempts=50, max_attempts=101, sd=42):
     """Generate a sweep of dictionaries as we vary the min number of attempts."""
     results = {}
