@@ -31,9 +31,9 @@ CACHE_DIR = os.environ.get(
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-bin_size = 0.5
+#bin_size = 0.5
 
-def neural_state_to_dict_key(neural_state, bin_size=bin_size):
+def neural_state_to_dict_key(neural_state, bin_size):
     return tuple(round(float(x) / bin_size) * bin_size for x in neural_state)
 
 def behavioral_state_to_key(b_state):
@@ -210,9 +210,9 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.5)
+                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.5)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
 
                     all_visit_count_n_dict[cur_neural_state_key] += 1
@@ -242,10 +242,10 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.5)
+                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
 
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.5)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
                     
                     all_visit_count_n_dict[cur_neural_state_key] += 1
@@ -2314,7 +2314,6 @@ def summarize_error_history(error_history, label="sweep"):
 if __name__ == "__main__":
     model = small_model.RNN().to(device)
     num_steps = 2
-    print(bin_size)
     
     #n_state_histogram = n_state_distribution_histograms_individual()
     #binned_overlay = n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True, max_display_bin=1500)
