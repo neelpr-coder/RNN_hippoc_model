@@ -214,7 +214,6 @@ def get_top3_current_and_targets(frame_info, state_type):
             "'behavioral states', or 'joint states'."
         )
 
-    # top3_items format: [(target_state, count), ...]
     target_states = [target_state for target_state, count in top3_items]
 
     return current_state, target_states
@@ -263,17 +262,12 @@ def plot_manifold_raw_two_route(
     Zoom and normal view
     """
 
-    # --------------------------------------------------
-    # 1. Actual ordered route path
-    # --------------------------------------------------
     actual_state_path = extract_state_path_from_route(route_sequence, state_type)
 
     if len(actual_state_path) == 0:
         raise ValueError("Actual route path is empty.")
 
-    # --------------------------------------------------
-    # 2. Build top-1 predicted route path
-    # --------------------------------------------------
+
     predicted_state_path = [actual_state_path[0]]
 
     frame_alignment_mismatches = 0
@@ -303,9 +297,6 @@ def plot_manifold_raw_two_route(
             f"top3_route_history that did not match the actual route state."
         )
 
-    # --------------------------------------------------
-    # 3. Map manifold keys -> indices
-    # --------------------------------------------------
     hashable_state_keys = [
         make_hashable_state(key)
         for key in state_keys
@@ -316,9 +307,6 @@ def plot_manifold_raw_two_route(
         for i, key in enumerate(hashable_state_keys)
     }
 
-    # --------------------------------------------------
-    # 4. Actual route indices
-    # --------------------------------------------------
     actual_indices = []
     missing_actual = 0
 
@@ -333,9 +321,7 @@ def plot_manifold_raw_two_route(
     if len(actual_indices) == 0:
         raise ValueError(f"No actual {state_type} route states matched manifold keys.")
 
-    # --------------------------------------------------
-    # 5. Predicted route indices
-    # --------------------------------------------------
+
     predicted_indices = []
     missing_predicted = 0
 
@@ -350,9 +336,6 @@ def plot_manifold_raw_two_route(
     if len(predicted_indices) == 0:
         raise ValueError(f"No predicted {state_type} route states matched manifold keys.")
 
-    # --------------------------------------------------
-    # 6. Trim to common frame length
-    # --------------------------------------------------
     common_len = min(len(actual_indices), len(predicted_indices))
 
     actual_indices = actual_indices[:common_len]
@@ -368,8 +351,6 @@ def plot_manifold_raw_two_route(
     actual_only_frames = []
     predicted_only_frames = []
 
-    # Start at 1 because frame 0 is the shared initial state.
-    # The real transition comparison is actual next state vs predicted next state.
     for frame_idx in range(1, common_len):
         actual_state = make_hashable_state(actual_state_path[frame_idx])
         predicted_state = make_hashable_state(predicted_state_path[frame_idx])
@@ -382,9 +363,6 @@ def plot_manifold_raw_two_route(
 
     transition_count = common_len - 1
 
-    # --------------------------------------------------
-    # 8. Debug counts
-    # --------------------------------------------------
     actual_hashable = [
         make_hashable_state(state)
         for state in actual_state_path
@@ -426,9 +404,6 @@ def plot_manifold_raw_two_route(
         )
     print("============================================\n")
 
-    # --------------------------------------------------
-    # 9. Visual coordinate offsets
-    # --------------------------------------------------
     data_span = manifold.max(axis=0) - manifold.min(axis=0)
     offset_vector = np.array([
         visual_offset_fraction * data_span[0],
@@ -436,17 +411,12 @@ def plot_manifold_raw_two_route(
         0.0
     ])
 
-    # These are display-only coordinates.
-    # The underlying manifold coordinates and matching logic are unchanged.
     actual_plot_coords = actual_coords - offset_vector
     predicted_plot_coords = predicted_coords + offset_vector
 
-    # Gold points stay at true coordinates
+
     gold_coords = actual_coords[matching_frames] if len(matching_frames) > 0 else None
 
-    # --------------------------------------------------
-    # 10. Helper for drawing a plot
-    # --------------------------------------------------
     def draw_route_plot(
         ax,
         zoom_to_cluster=False,
@@ -456,7 +426,6 @@ def plot_manifold_raw_two_route(
     ):
         ax.set_proj_type("ortho")
 
-        # Background manifold
         if show_all_points:
             ax.scatter(
                 manifold[:, 0],
@@ -470,7 +439,6 @@ def plot_manifold_raw_two_route(
                 depthshade=False
             )
 
-        # Actual route line, visually offset
         ax.plot(
             actual_plot_coords[:, 0],
             actual_plot_coords[:, 1],
@@ -482,7 +450,6 @@ def plot_manifold_raw_two_route(
             zorder=6
         )
 
-        # Predicted route line, visually offset
         ax.plot(
             predicted_plot_coords[:, 0],
             predicted_plot_coords[:, 1],
@@ -495,7 +462,6 @@ def plot_manifold_raw_two_route(
             zorder=7
         )
 
-        # Actual-only points
         if len(actual_only_frames) > 0:
             actual_only_coords = actual_plot_coords[actual_only_frames]
 
@@ -512,7 +478,6 @@ def plot_manifold_raw_two_route(
                 depthshade=False
             )
 
-        # Predicted-only points
         if len(predicted_only_frames) > 0:
             predicted_only_coords = predicted_plot_coords[predicted_only_frames]
 
@@ -529,7 +494,6 @@ def plot_manifold_raw_two_route(
                 depthshade=False
             )
 
-        # Same-frame matches
         if gold_coords is not None:
             ax.scatter(
                 gold_coords[:, 0],
@@ -553,10 +517,7 @@ def plot_manifold_raw_two_route(
         ax.set_ylabel(f"{manifold_type} 2")
         ax.set_zlabel(f"{manifold_type} 3")
 
-        # Cluster zoom based on actual + predicted route coordinates only.
         if zoom_to_cluster:
-            # Use the plotted/offset route coordinates so the zoom contains
-            # exactly what is visually drawn.
             zoom_coords = np.vstack([
                 actual_plot_coords,
                 predicted_plot_coords
@@ -575,7 +536,6 @@ def plot_manifold_raw_two_route(
             y_range = y_max - y_min
             z_range = z_max - z_min
 
-            # Add padding separately for each axis
             x_pad = zoom_padding_fraction * max(x_range, 1e-8)
             y_pad = zoom_padding_fraction * max(y_range, 1e-8)
             z_pad = zoom_padding_fraction * max(z_range, 1e-8)
@@ -584,8 +544,6 @@ def plot_manifold_raw_two_route(
             ax.set_ylim(y_min - y_pad, y_max + y_pad)
             ax.set_zlim(z_min - z_pad, z_max + z_pad)
 
-        # Do not force equal box aspect for PCA because PCA has much smaller z-range.
-        # This prevents the PCA view from looking overly squashed.
         if manifold_type == "PCA":
             ax.set_box_aspect((1.35, 1.15, 0.85))
         else:
@@ -593,9 +551,6 @@ def plot_manifold_raw_two_route(
 
         ax.legend(loc="upper right")
 
-    # --------------------------------------------------
-    # 11. Full view
-    # --------------------------------------------------
     if make_full_plot:
         fig_full = plt.figure(figsize=(15, 13))
         ax_full = fig_full.add_subplot(111, projection="3d")
@@ -619,9 +574,6 @@ def plot_manifold_raw_two_route(
 
         plt.show()
 
-    # --------------------------------------------------
-    # 12. Cluster zoom view
-    # --------------------------------------------------
     if make_zoomed_plot:
         fig_zoom = plt.figure(figsize=(15, 13))
         ax_zoom = fig_zoom.add_subplot(111, projection="3d")
@@ -647,13 +599,7 @@ def plot_manifold_raw_two_route(
 
 
 
-def build_top1_predicted_path_from_route(
-    route_sequence,
-    b_transition_dict,
-    neural_state_dict,
-    pair_transition_dict,
-    state_type
-):
+def build_top1_predicted_path_from_route(route_sequence,b_transition_dict,neural_state_dict,pair_transition_dict,state_type):
     """
     Builds the top-1 highest-probability predicted route from the dictionary. Time frame aligned. 
     """
@@ -707,11 +653,6 @@ REDUCTION_LABELS = {
 def get_dictionary_plot_config(dictionary_name):
     """
     Maps a simple dictionary name to the state_type and dict_type
-
-    dictionary_name options:
-        "neural"
-        "behavioral"
-        "paired"
     """
 
     if dictionary_name == "neural":
@@ -739,12 +680,7 @@ def get_dictionary_plot_config(dictionary_name):
         raise ValueError("dictionary_name must be 'neural', 'behavioral', or 'paired'.")
 
 
-def select_transition_dict(
-    dictionary_name,
-    neural_state_dict,
-    behavioral_state_dict,
-    pair_transition_dict
-):
+def select_transition_dict(dictionary_name,neural_state_dict,behavioral_state_dict,pair_transition_dict):
     """
     Selects the dictionary that should be embedded/plotted.
     """
@@ -834,10 +770,7 @@ def plot_manifold_panel_on_axis(
     display_name = config["display_name"]
     reduction_label = REDUCTION_LABELS[reduction_method]
 
-    actual_state_path = extract_state_path_from_route(
-        route_sequence,
-        state_type=state_type
-    )
+    actual_state_path = extract_state_path_from_route(route_sequence, state_type=state_type)
 
     predicted_state_path = build_top1_predicted_path_from_route(
         route_sequence=route_sequence,
@@ -847,40 +780,16 @@ def plot_manifold_panel_on_axis(
         state_type=state_type
     )
 
-    actual_coords, missing_actual = path_to_coords(
-        actual_state_path,
-        state_keys,
-        manifold
-    )
-
-    predicted_coords, missing_predicted = path_to_coords(
-        predicted_state_path,
-        state_keys,
-        manifold
-    )
-
+    actual_coords, missing_actual = path_to_coords(actual_state_path, state_keys, manifold)
+    predicted_coords, missing_predicted = path_to_coords(predicted_state_path, state_keys, manifold)
     n_frames = min(len(actual_state_path), len(predicted_state_path))
-
-    actual_hashable = [
-        make_hashable_state(state)
-        for state in actual_state_path[:n_frames]
-    ]
-
-    predicted_hashable = [
-        make_hashable_state(state)
-        for state in predicted_state_path[:n_frames]
-    ]
+    actual_hashable = [make_hashable_state(state) for state in actual_state_path[:n_frames]]
+    predicted_hashable = [make_hashable_state(state) for state in predicted_state_path[:n_frames]]
 
     actual_valid = ~np.isnan(actual_coords[:n_frames]).any(axis=1)
     predicted_valid = ~np.isnan(predicted_coords[:n_frames]).any(axis=1)
 
-    same_frame_mask = np.array(
-        [
-            actual_hashable[i] == predicted_hashable[i]
-            for i in range(n_frames)
-        ],
-        dtype=bool
-    )
+    same_frame_mask = np.array([actual_hashable[i] == predicted_hashable[i] for i in range(n_frames)], dtype=bool)
 
     same_frame_mask = same_frame_mask & actual_valid & predicted_valid
 
@@ -889,7 +798,6 @@ def plot_manifold_panel_on_axis(
 
     same_count = int(np.sum(same_frame_mask))
 
-    # Colors
     all_state_color = "gray"
     actual_line_color = "crimson"
     predicted_line_color = "deepskyblue"
@@ -898,95 +806,26 @@ def plot_manifold_panel_on_axis(
     same_point_color = "gold"
 
     ax.set_proj_type("ortho")
+    ax.scatter(manifold[:, 0],manifold[:, 1],manifold[:, 2],s=8,color=all_state_color,alpha=0.20,depthshade=False)
+    ax.plot(actual_coords[:, 0],actual_coords[:, 1],actual_coords[:, 2],color=actual_line_color,linewidth=2.0,alpha=0.80)
+    ax.plot(predicted_coords[:, 0],predicted_coords[:, 1],predicted_coords[:, 2],color=predicted_line_color,linewidth=2.0,linestyle="--",alpha=0.95)
 
-    # All manifold states
-    ax.scatter(
-        manifold[:, 0],
-        manifold[:, 1],
-        manifold[:, 2],
-        s=8,
-        color=all_state_color,
-        alpha=0.20,
-        depthshade=False
-    )
-
-    # Actual route
-    ax.plot(
-        actual_coords[:, 0],
-        actual_coords[:, 1],
-        actual_coords[:, 2],
-        color=actual_line_color,
-        linewidth=2.0,
-        alpha=0.80
-    )
-
-    # Predicted route
-    ax.plot(
-        predicted_coords[:, 0],
-        predicted_coords[:, 1],
-        predicted_coords[:, 2],
-        color=predicted_line_color,
-        linewidth=2.0,
-        linestyle="--",
-        alpha=0.95
-    )
-
-    # Actual-only points
     actual_only_coords = actual_coords[:n_frames][actual_only_mask]
 
     if len(actual_only_coords) > 0:
-        ax.scatter(
-            actual_only_coords[:, 0],
-            actual_only_coords[:, 1],
-            actual_only_coords[:, 2],
-            s=42,
-            color=actual_point_color,
-            marker="o",
-            alpha=0.95,
-            depthshade=False,
-            zorder=10
-        )
+        ax.scatter(actual_only_coords[:, 0],actual_only_coords[:, 1],actual_only_coords[:, 2],s=42,color=actual_point_color,marker="o",alpha=0.95,depthshade=False,zorder=10)
 
-    # Predicted-only points
     predicted_only_coords = predicted_coords[:n_frames][predicted_only_mask]
 
     if len(predicted_only_coords) > 0:
-        ax.scatter(
-            predicted_only_coords[:, 0],
-            predicted_only_coords[:, 1],
-            predicted_only_coords[:, 2],
-            s=58,
-            color=predicted_point_color,
-            marker="^",
-            alpha=0.95,
-            depthshade=False,
-            zorder=11
-        )
+        ax.scatter(predicted_only_coords[:, 0],predicted_only_coords[:, 1],predicted_only_coords[:, 2],s=58,color=predicted_point_color,marker="^",alpha=0.95,depthshade=False,zorder=11)
 
-    # Same-frame points
     same_coords = actual_coords[:n_frames][same_frame_mask]
 
     if len(same_coords) > 0:
-        ax.scatter(
-            same_coords[:, 0],
-            same_coords[:, 1],
-            same_coords[:, 2],
-            s=82,
-            color=same_point_color,
-            edgecolor="black",
-            linewidth=0.8,
-            marker="o",
-            alpha=0.98,
-            depthshade=False,
-            zorder=12
-        )
+        ax.scatter(same_coords[:, 0],same_coords[:, 1],same_coords[:, 2],s=82,color=same_point_color,edgecolor="black",linewidth=0.8,marker="o",alpha=0.98,depthshade=False,zorder=12)
 
-    # Keep only min visits in the per-panel title
-    ax.set_title(
-        f"{reduction_label}, min visits = {min_visits}",
-        fontsize=16,
-        pad=16
-    )
+    ax.set_title(f"{reduction_label}, min visits = {min_visits}",fontsize=16,pad=16)
 
     ax.set_xlabel(f"{reduction_label} 1", fontsize=10, labelpad=7)
     ax.set_ylabel(f"{reduction_label} 2", fontsize=10, labelpad=7)
@@ -994,7 +833,6 @@ def plot_manifold_panel_on_axis(
 
     ax.view_init(elev=elev, azim=azim)
 
-    # Full manifold limits
     mins = manifold.min(axis=0)
     maxs = manifold.max(axis=0)
     ranges = maxs - mins
@@ -1083,25 +921,13 @@ def plot_error_panel_on_axis(
     y_limits=None
 ):
     """
-    Draws one clean error-vs-time-frame panel below the manifold.
+    Draws one  error-vs-time-frame panel below the manifold.
     """
 
     frames = np.arange(1, len(error_values) + 1)
 
-    ax.plot(
-        frames,
-        error_values,
-        color="black",
-        linewidth=1.2,
-        marker="o",
-        markersize=2.4
-    )
-
-    ax.set_title(
-        f"Error vs Time Frame, min visits = {min_visits}",
-        fontsize=10
-    )
-
+    ax.plot(frames, error_values, color="black", linewidth=1.2, marker="o", markersize=2.4)
+    ax.set_title(f"Error vs Time Frame, min visits = {min_visits}", fontsize=10)
     ax.set_xlabel("Frame", fontsize=9)
     ax.set_ylabel("Error", fontsize=9)
     ax.tick_params(axis="both", labelsize=8)
@@ -1133,48 +959,19 @@ def create_reduction_epoch_collage(
     display_name = config["display_name"]
     reduction_label = REDUCTION_LABELS[reduction_method]
 
-    route_sequence = np.load(
-        os.path.join(SCRIPT_DIR, f"route_sequence_min{route_min_visits}.npy"),
-        allow_pickle=True
-    )
+    route_sequence = np.load(os.path.join(SCRIPT_DIR, f"route_sequence_min{route_min_visits}.npy"), allow_pickle=True)
 
     panel_data = []
     all_error_values = []
 
-    # --------------------------------------------------
-    # First pass: compute manifolds and error histories
-    # --------------------------------------------------
     for min_visits in min_visits_list:
-        neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(
-            min_visits=min_visits,
-            max_visits=max_visits,
-            sd=sd,
-            bin_size=bin_size
-        )
+        neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(min_visits=min_visits, max_visits=max_visits, sd=sd, bin_size=bin_size)
+        transition_dict = select_transition_dict(dictionary_name, neural_state_dict, behavioral_state_dict, pair_transition_dict)
+        matrix, state_keys = convert_dict_to_matrix(transition_dict, dict_type=dict_type)
 
-        transition_dict = select_transition_dict(
-            dictionary_name,
-            neural_state_dict,
-            behavioral_state_dict,
-            pair_transition_dict
-        )
+        print(f"{display_name} {reduction_label}, min visits {min_visits}:vmatrix shape = {matrix.shape}")
 
-        matrix, state_keys = convert_dict_to_matrix(
-            transition_dict,
-            dict_type=dict_type
-        )
-
-        print(
-            f"{display_name} {reduction_label}, min visits {min_visits}: "
-            f"matrix shape = {matrix.shape}"
-        )
-
-        manifold = perform_manifold_learning(
-            matrix,
-            method=reduction_method,
-            n_components=3,
-            random_state=42
-        )
+        manifold = perform_manifold_learning(matrix, method=reduction_method, n_components=3, random_state=42)
 
         error_history = figure2_generation.evaluate_error_history_on_fixed_route(
             route_sequence=route_sequence,
@@ -1185,11 +982,7 @@ def create_reduction_epoch_collage(
             apply_top3_filter=False
         )
 
-        error_values = extract_error_values(
-            error_history,
-            error_key=error_key
-        )
-
+        error_values = extract_error_values(error_history, error_key=error_key)
         all_error_values.append(error_values)
 
         panel_data.append({
@@ -1202,7 +995,6 @@ def create_reduction_epoch_collage(
             "error_values": error_values
         })
 
-    # Shared y-axis range for the three error plots
     concatenated_errors = np.concatenate(all_error_values)
 
     y_min = float(np.min(concatenated_errors))
@@ -1214,19 +1006,8 @@ def create_reduction_epoch_collage(
         y_pad = 0.12 * (y_max - y_min)
 
     y_limits = (y_min - y_pad, y_max + y_pad)
-
-    # --------------------------------------------------
-    # Build collage figure
-    # --------------------------------------------------
     fig = plt.figure(figsize=(22, 10))
-
-    grid = fig.add_gridspec(
-        2,
-        3,
-        height_ratios=[4.7, 1.35],
-        hspace=0.18,
-        wspace=0.16
-    )
+    grid = fig.add_gridspec(2, 3, height_ratios=[4.7, 1.35], hspace=0.18, wspace=0.16)
 
     shared_legend_handles = None
 
@@ -1253,34 +1034,12 @@ def create_reduction_epoch_collage(
 
         ax_error = fig.add_subplot(grid[1, col])
 
-        plot_error_panel_on_axis(
-            ax=ax_error,
-            error_values=data["error_values"],
-            min_visits=min_visits,
-            y_limits=y_limits
-        )
+        plot_error_panel_on_axis(ax=ax_error, error_values=data["error_values"], min_visits=min_visits, y_limits=y_limits)
 
-    fig.suptitle(
-        f"{display_name} dictionary trajectories across epochs — {reduction_label}",
-        fontsize=20,
-        y=0.96
-    )
+    fig.suptitle(f"{display_name} dictionary trajectories across epochs — {reduction_label}", fontsize=20, y=0.96)
+    fig.legend(handles=shared_legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.925), ncol=6, fontsize=10, frameon=True)
 
-    fig.legend(
-        handles=shared_legend_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.925),
-        ncol=6,
-        fontsize=10,
-        frameon=True
-    )
-
-    plt.subplots_adjust(
-        left=0.04,
-        right=0.98,
-        top=0.84,
-        bottom=0.08
-    )
+    plt.subplots_adjust(left=0.04, right=0.98, top=0.84, bottom=0.08)
 
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")

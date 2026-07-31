@@ -529,7 +529,7 @@ if __name__ == "__main__":
     np.random.seed(SEED)
     random.seed(SEED)
     model = small_model.RNN().to(device)
-    checkpoint = torch.load("post_stage_1_model.pt", map_location=device)
+    checkpoint = torch.load("post_stage1_model_sd42.pt", map_location=device)
 
     model.load_state_dict(checkpoint)
     model.eval()
@@ -547,10 +547,10 @@ if __name__ == "__main__":
     new_b_t_dict, new_n_t_dict, new_pair_t_dict, stage_2_error_his = run_pertubation(model, total_num_pertubations=1000, sd=42)
 
     # gen figures for visualization
-    graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
-    graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
-    graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    #plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
-    #stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
-    #plot_normalized_error_over_time(stage_3_error_his, title="Stage 3 Error Plot", x_label="Time Steps", include_pair_error=False, save_path="stage3_normalized_error_over_time.png")
+    #graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
+    #graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
+    #graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    #graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
+    stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
+    plot_normalized_error_over_time(stage_3_error_his, title="Stage 3 Perturbation Error Plot", x_label="Time Steps", include_pair_error=False, save_path="stage3_normalized_error_over_time.png")
