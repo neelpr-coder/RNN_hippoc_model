@@ -9,7 +9,7 @@ import random
 from PIL import Image
 import data
 from collections import defaultdict
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import math
 
 COPY_FOLDER = "Copy_Transition_Cache"
@@ -114,7 +114,8 @@ def run_pertubation(model, total_num_pertubations, sd=42):
     '''Run pertubation such that one node is randomly knockout hooked at each step
         A minimum of 1000 total pertubations must take place
         Each node must be pertubed between 50 to a 100 times such that the sum of each node's pertubation count is 1000
-        Update observed transitions to the copied transition dicts'''
+        Update observed transitions to the copied transition dicts
+        Keep track of stage 2 error original top transition - new top transition post pertubation'''
     stage2_error_history = []
     pertub_counter = 0
     neuron_visit_count_list = np.zeros(model.hidden_size, dtype=int)
@@ -132,7 +133,7 @@ def run_pertubation(model, total_num_pertubations, sd=42):
     with np.load(ORIGINAL_PAIR_PATH, allow_pickle=True) as original_pair_file:
         original_pair_transition_dict = (original_pair_file["pair_dict"].item())
     
-    # load and open the saved dicts for writing
+    # load and open the copied dicts for writing
     with np.load(n_path_copy, allow_pickle=True) as data_n:
         loaded_n = data_n["neural_state_dict"].item()
 
@@ -140,7 +141,7 @@ def run_pertubation(model, total_num_pertubations, sd=42):
         loaded_b = data_b["b_transition_dict"].item()
 
     with np.load(pair_path_copy, allow_pickle=True) as data_pair:
-            loaded_pair = data_pair["pair_transition_dict"].item()
+            loaded_pair = data_pair["pair_dict"].item()
 
     updated_n_transition_dict = defaultdict(lambda: defaultdict(int))
     updated_b_transition_dict = defaultdict(lambda: defaultdict(int))
@@ -277,7 +278,7 @@ def run_pertubation(model, total_num_pertubations, sd=42):
 
     np.savez_compressed(b_path_copy, b_transition_dict=np.array(save_b, dtype=object))
 
-    np.savez_compressed(pair_path_copy, pair_transition_dict=np.array(save_pair, dtype=object))
+    np.savez_compressed(pair_path_copy, pair_dict=np.array(save_pair, dtype=object))
 
     print("Perturbations per neuron:", neuron_visit_count_list)
     print("Total perturbations:", pertub_counter)
@@ -293,7 +294,7 @@ def outgoing_transition_counts(transition_dict):
 
     return outgoing_count
 
-def graph_neural_distribution(neural_dict, bin_size = 100, show = True, save_path = None):
+def graph_neural_distribution(neural_dict, title="Neural-State Outgoing Transition Distribution", bin_size = 100, show = True, save_path = None):
     '''Create a neural distribution histogram'''
     outgoing_counts = outgoing_transition_counts(neural_dict)
 
@@ -309,7 +310,8 @@ def graph_neural_distribution(neural_dict, bin_size = 100, show = True, save_pat
     fig, ax = plt.subplots(figsize=(10, 6))
 
     ax.hist(visit_counts, bins=bins, edgecolor="black", alpha=0.8)
-    ax.set_title("Neural-State Outgoing Transition Distribution")
+    ax.set_yscale("log")
+    ax.set_title(title)
     ax.set_xlabel("Number of outgoing transitions")
     ax.set_ylabel("Number of neural states")
     ax.grid(axis="y", alpha=0.3)
@@ -326,7 +328,7 @@ def graph_neural_distribution(neural_dict, bin_size = 100, show = True, save_pat
 
     return outgoing_counts
 
-def graph_behavioral_distribution(behavioral_dict, collapse_headings=True, show=True, save_path=None):
+def graph_behavioral_distribution(behavioral_dict, title, collapse_headings=True, show=True, save_path=None):
     '''Create a behavioral distribution bar plot'''
     outgoing_counts = outgoing_transition_counts(
         behavioral_dict
@@ -358,7 +360,8 @@ def graph_behavioral_distribution(behavioral_dict, collapse_headings=True, show=
     fig, ax = plt.subplots(figsize=(figure_width, 6))
 
     ax.bar(x_positions, counts, width=0.8)
-    ax.set_title("Behavioral-State Outgoing Transition Counts")
+    ax.set_yscale("log")
+    ax.set_title(title)
     ax.set_xlabel("Behavioral position" if collapse_headings else "Behavioral state")
     ax.set_ylabel("Number of outgoing transitions")
 
@@ -521,17 +524,33 @@ def plot_normalized_error_over_time(error_history, title, x_label, include_pair_
     print("Minimum normalized error:", np.min(normalized_errors))
 
 if __name__ == "__main__":
+    SEED = 42
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
     model = small_model.RNN().to(device)
+    checkpoint = torch.load("post_stage_1_model.pt", map_location=device)
 
-    checkpoint = torch.load(
-        "post_stage_2_model.pt",
-        map_location=device
-    )
     model.load_state_dict(checkpoint)
     model.eval()
+
+    route_seq = np.load("route_sequence_min100.npy", allow_pickle=True)
+    with np.load(ORIGINAL_N_PATH, allow_pickle=True) as original_n_file:
+        og_n_dict = (original_n_file["neural_state_dict"].item())
+
+    with np.load(ORIGINAL_B_PATH, allow_pickle=True) as original_b_file:
+        og_b_dict = (original_b_file["b_transition_dict"].item())
+
+    with np.load(ORIGINAL_PAIR_PATH, allow_pickle=True) as original_pair_file:
+        og_pair_dict = (original_pair_file["pair_dict"].item())
 
     new_b_t_dict, new_n_t_dict, new_pair_t_dict, stage_2_error_his = run_pertubation(model, total_num_pertubations=1000, sd=42)
 
     # gen figures for visualization
-    graph_neural_distribution(new_n_t_dict)
-    graph_behavioral_distribution(new_b_t_dict)
+    graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
+    graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
+    graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    #plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
+    #stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
+    #plot_normalized_error_over_time(stage_3_error_his, title="Stage 3 Error Plot", x_label="Time Steps", include_pair_error=False, save_path="stage3_normalized_error_over_time.png")

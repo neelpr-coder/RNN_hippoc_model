@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import figure2_generation as fig2
+import figure2_generation as f2g
 import small_model
+import os
+import torch
 
 
 def pearson_corr_between_vectors(n_state_a, n_state_b):
@@ -117,44 +119,47 @@ def plot_neural_state_pearson_confusion_matrix(
     plt.show()
 
 
-def neural_state_vector_similarity_heatmaps(top_k=100):
-    model = fig2.small_model.RNN().to(fig2.device)
-
-    sweep_results = fig2.sweep_data_gen(
-        model,
-        step_size=5,
-        min_attempts=50,
-        max_attempts=101,
-        sd=42
-    )
-
-    matrix_50_55, x_labels, y_labels, counts_50, counts_55 = neural_state_pearson_confusion_matrix(
-        sweep_results,
-        min_attempts_a=50,
-        min_attempts_b=55,
-        top_k=top_k
+def neural_state_vector_similarity_heatmaps(
+    sweep_results,
+    top_k=100
+):
+    matrix_50_55, x_labels, y_labels, counts_50, counts_55 = (
+        neural_state_pearson_confusion_matrix(
+            sweep_results,
+            min_attempts_a=50,
+            min_attempts_b=55,
+            top_k=top_k
+        )
     )
 
     plot_neural_state_pearson_confusion_matrix(
         matrix_50_55,
         x_labels,
         y_labels,
-        title=f"Neural-State Vector Similarity: min_attempts 50 vs 55, top {top_k}",
+        title=(
+            "Neural-State Vector Similarity: "
+            f"min_attempts 50 vs 55, top {top_k}"
+        ),
         tick_step=5
     )
 
-    matrix_50_100, x_labels, y_labels, counts_50, counts_100 = neural_state_pearson_confusion_matrix(
-        sweep_results,
-        min_attempts_a=50,
-        min_attempts_b=100,
-        top_k=top_k
+    matrix_50_100, x_labels, y_labels, counts_50, counts_100 = (
+        neural_state_pearson_confusion_matrix(
+            sweep_results,
+            min_attempts_a=50,
+            min_attempts_b=100,
+            top_k=top_k
+        )
     )
 
     plot_neural_state_pearson_confusion_matrix(
         matrix_50_100,
         x_labels,
         y_labels,
-        title=f"Neural-State Vector Similarity: min_attempts 50 vs 100, top {top_k}",
+        title=(
+            "Neural-State Vector Similarity: "
+            f"min_attempts 50 vs 100, top {top_k}"
+        ),
         tick_step=5
     )
 
@@ -261,9 +266,14 @@ def plot_neural_state_euclidean_confusion_matrix(
     plt.show()
 
 if __name__ == "__main__":
-    neural_state_vector_similarity_heatmaps(top_k=100)
-    model = small_model.RNN().to(fig2.device)
-    sweep_results = fig2.sweep_data_gen(
+    checkpoint_path = os.path.join(f2g.SCRIPT_DIR, "post_stage1_model_sd42.pt")
+    if not os.path.exists(checkpoint_path): 
+        raise FileNotFoundError(f"Post stage 1 model not found")
+    model = small_model.RNN().to(f2g.device)
+    model.load_state_dict(torch.load(checkpoint_path, map_location=f2g.device, weights_only=True))
+    model.eval()
+
+    sweep_results = f2g.sweep_data_gen(
         model,
         step_size=5,
         min_attempts=50,
@@ -271,7 +281,7 @@ if __name__ == "__main__":
         sd=42
     )
 
-
+    neural_state_vector_similarity_heatmaps(sweep_results=sweep_results, top_k=100)
     matrix_50_55_euc, x_labels_50, y_labels_55, counts_50, counts_55 = neural_state_euclidean_confusion_matrix(
             sweep_results,
             min_attempts_a=50,

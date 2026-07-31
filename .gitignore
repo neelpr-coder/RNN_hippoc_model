@@ -13,3 +13,6 @@ n_tsne_manifold_min100_sd42.npy
 neural_keys_min100_sd42.npy
 top3_route_transitions_min100.npy
 Copy_Transition_Cache
+stage2_normalized_error_over_time.png
+stage3_normalized_error_over_time.png
+post_stage1_model_sd42.pt

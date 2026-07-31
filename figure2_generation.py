@@ -31,7 +31,7 @@ CACHE_DIR = os.environ.get(
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-#bin_size = 0.5
+bin_size = 0.3
 
 def neural_state_to_dict_key(neural_state, bin_size):
     return tuple(round(float(x) / bin_size) * bin_size for x in neural_state)
@@ -157,6 +157,8 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
         b_state_img_path_dict, all_visit_count_dict = data.image_preproccesing() # list of tuples (b_state, img_path) and dict of all behavioral_states and their associated visit count
         np.random.seed(sd)
         all_b_states = list(all_visit_count_dict.keys())
+        np.random.seed(sd)
+        random.seed(sd)
         starting_point = all_b_states[np.random.randint(0, len(all_b_states))] # randomly select a behavioral state as a starting point
         
         pair_transition_dict = defaultdict(lambda: defaultdict(int))
@@ -210,9 +212,9 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    cur_neural_state_key = neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=bin_size)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=bin_size)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
 
                     all_visit_count_n_dict[cur_neural_state_key] += 1
@@ -242,10 +244,10 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     if cur_count < min_visits:
                         progress_bar.update(1)
                     
-                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    cur_neural_state_key =  neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=bin_size)
                     cur_b_state_key = behavioral_state_to_key(cur_b_state)
 
-                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                    next_neural_state_key = neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=bin_size)
                     next_b_state_key = behavioral_state_to_key(next_b_state)
                     
                     all_visit_count_n_dict[cur_neural_state_key] += 1
@@ -1582,17 +1584,7 @@ def save_top3_route_transitions(
 
     return top3_history
 
-def animate_json_lookup_transition_clean(
-    pair_transition_dict,
-    b_transition_dict,
-    neural_state_dict,
-    max_steps=50,
-    interval=2000,
-    save_path=None,
-    seed=42,
-    route_sequence=None,
-    show_plot=True
-):
+def animate_json_lookup_transition_clean(pair_transition_dict, b_transition_dict, neural_state_dict, max_steps=50, interval=2000, save_path=None, seed=42, route_sequence=None, show_plot=True):
     """
     Animate lookup along a predetermined 50-step route.
     """
@@ -2312,8 +2304,23 @@ def summarize_error_history(error_history, label="sweep"):
 
 
 if __name__ == "__main__":
+    SEED = 42
+
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
     model = small_model.RNN().to(device)
+    model.eval()
+
+    BASELINE_MODEL_PATH = os.path.join(SCRIPT_DIR, "post_stage1_model_sd42.pt")
+
+    torch.save(model.state_dict(), BASELINE_MODEL_PATH)
+
+    print(f"[Log] Baseline model saved to {BASELINE_MODEL_PATH}")
     num_steps = 2
+
+    n_distrib_overlay = n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce="sum")
     
     #n_state_histogram = n_state_distribution_histograms_individual()
     #binned_overlay = n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True, max_display_bin=1500)
@@ -2323,15 +2330,17 @@ if __name__ == "__main__":
     #sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
     #print(sweep_results.keys())
     
-    '''heatmap_pair_unique_edges_100 = paired_transition_density_heatmap(
-        pair_transition_dict_100,
-        grid_size=10,
-        mode="unique_edges",
-        title="Unique Paired Transition Density by Position, min_attempts=100"
-    )'''
-    pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, all_visit_count_b_dict_100, all_visit_count_n_dict_100 = generate_dicts(model)
+    #pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, all_visit_count_b_dict_100, all_visit_count_n_dict_100 = generate_dicts(model)
     #pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
     #pair_transition_dict_75, behavioral_transistion_dict_75, neural_state_dict_75, _, _ = generate_dicts(model, min_visits=75)
+
+    '''heatmap_pair_unique_edges_100 = paired_transition_density_heatmap(
+            pair_transition_dict_100,
+            grid_size=10,
+            mode="unique_edges",
+            title="Unique Paired Transition Density by Position, min_attempts=100"
+        )'''
+    
     '''shared_route_sequence = generate_supported_observed_pair_route(
         pair_transition_dict_100,
         neural_state_dict_100,
@@ -2360,17 +2369,17 @@ if __name__ == "__main__":
         pair_transition_dict_100,
         top_k=3,
         apply_top3_filter=False
-    )'''
+    )
 
-    _, route100, error_history_100 = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_animation_min100.mp4")
+    _, route100, animation_error_history = animate_json_lookup_transition_clean(pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, max_steps=50, interval=1200, save_path="lookup_animation_min100.mp4", route_sequence=shared_route_sequence)
     np.save(os.path.join(SCRIPT_DIR, "route_sequence_min100.npy"), np.array(route100, dtype=object), allow_pickle=True)
 
-    #np.save(os.path.join(SCRIPT_DIR, "error_history_min100.npy"), np.array(error_history_100, dtype=object), allow_pickle=True)
+    np.save(os.path.join(SCRIPT_DIR, "error_history_min100.npy"), np.array(error_history_100, dtype=object), allow_pickle=True)
 
     top3_route_history_100 = save_top3_route_transitions(route100, behavioral_transition_dict_100, neural_state_dict_100, pair_transition_dict_100, top_k=3)
 
     np.save(os.path.join(SCRIPT_DIR, "top3_route_transitions_min100.npy"), np.array(top3_route_history_100, dtype=object), allow_pickle=True)
-    #error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Raw Error Plot Over Same Route: min50 vs min100", use_normalized=False, show_points=True)
+    error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Normalized Error Plot Over Same Route: min50 vs min100", use_normalized=True, show_points=True)'''
 
     '''summarize_fixed_route_coverage(
         shared_route_sequence,
@@ -2394,9 +2403,9 @@ if __name__ == "__main__":
     '''b_to_n_dict = build_b_to_n_map(pair_transition_dict_100)
     nheat = n_state_distribution_heatmap(b_to_n_dict, agg="union")
     bheat = b_state_distribution_heatmap(all_visit_count_b_dict_100, agg="mean")
-    joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union")
+    joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union")'''
 
-    #n_distrib_overlay = n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce="sum")
+    '''
 
     json_path = os.path.join(SCRIPT_DIR, "behavioral_neural_state_table.json")
     out_ready = json_b_to_n_state(pair_transition_dict, 'count')

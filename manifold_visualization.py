@@ -3,7 +3,7 @@ from sklearn.decomposition import PCA
 from umap import UMAP
 import numpy as np
 import os 
-from collections import defaultdict
+from collections import defaultdict, Counter
 import matplotlib.pyplot as plt
 import figure2_generation
 from matplotlib.lines import Line2D
@@ -35,7 +35,7 @@ def extract_behavioral_path_from_route(route_sequence):
 
     return behavioral_path
 
-def load_cache(min_visits=100, max_visits=151, sd=42, bin_size=0.5):
+def load_cache(min_visits=100, max_visits=151, sd=42, bin_size=0.3):
     """
     Checks if the cache directory exists and loads cached data for manifold visualization.  
     """
@@ -1338,8 +1338,8 @@ def generate_all_dictionary_collages(
 
 
 if __name__ == "__main__":
-    RUN_COLLAGES = True
-    RUN_SINGLE_PLOTS_WITHOUT_INSETS = False
+    RUN_COLLAGES = False
+    RUN_SINGLE_PLOTS_WITHOUT_INSETS = True
 
 
     MIN_VISITS_LIST = (50, 75, 100)
@@ -1348,7 +1348,7 @@ if __name__ == "__main__":
 
     MAX_VISITS = 151
     SD = 42
-    BIN_SIZE = 0.5
+    BIN_SIZE = 0.3
 
   
     ROUTE_MIN_VISITS = 100
