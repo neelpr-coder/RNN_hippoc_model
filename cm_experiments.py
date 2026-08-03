@@ -342,13 +342,4 @@ if __name__ == "__main__":
     CONNECTED_MODEL_PATH = os.path.join(SCRIPT_DIR, "post_stage1_connected_model_sd42.pt")
     torch.save(model.state_dict(), CONNECTED_MODEL_PATH)
     b_transition_dict, all_visit_b_count_dict, Na_transition_dict, Nb_transition_dict, Na_Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_b_transition_dict = generate_dicts(model)
-    rearranged_Na_b = f2g.build_b_to_n_map(Na_b_transition_dict)
-    rearranged_Nb_b = f2g.build_b_to_n_map(Nb_b_transition_dict)
-    _, _, _ = f2g.b_state_distribution_heatmap(b_transition_dict)
-    _, _, _ = f2g.n_state_distribution_heatmap(rearranged_Na_b)
-    _, _, _ = f2g.n_state_distribution_heatmap(rearranged_Nb_b)
-
-    f2g.graph_neural_distribution(Na_transition_dict)
-    f2g.graph_neural_distribution(Nb_transition_dict)
-    pt.graph_behavioral_distribution(b_transition_dict, title="Connected RNN Behavioral Transition Distribution")
-    route_seq = np.load("route_sequence_min100.npy", allow_pickle=True)
+    
