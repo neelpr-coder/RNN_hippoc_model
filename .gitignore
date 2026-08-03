@@ -17,3 +17,5 @@ stage2_normalized_error_over_time.png
 stage3_normalized_error_over_time.png
 post_stage1_model_sd42.pt
 error_history_min100.npy
+Connected_Cache
+post_stage1_connected_model_sd42.pt

@@ -22,16 +22,18 @@ class connected_models(nn.Module):
         self.register_buffer("ab_mapping", ab_mapping)
         self.register_buffer("ba_mapping", ba_mapping)
 
-    def connection_current(self, h_source, map):
+    def connection_current(self, h_source, mapping):
         if h_source.dim() == 2: 
-            h_source = h_source.unsqueeze(0)
+            h_source = h_source.squeeze(0)
 
-        summed_activations = h_source[map].sum(dim=1)
+        summed_activations = h_source[mapping].sum(dim=1)
         current = summed_activations
 
         return current
 
     def forward(self, x_a, x_b, h_a, h_b):
+        x_a = x_a.reshape(1, -1)
+        x_b = x_b.reshape(1, -1)
         I_aa = self.connectAA(h_a)
         I_ab = self.connection_current(h_a, self.ab_mapping)
         I_bb = self.connectBB(h_b)
