@@ -191,6 +191,10 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
         with torch.no_grad():
             h_a = torch.zeros(1, model.hidden_size1, device=device)
             h_b = torch.zeros(1, model.hidden_size2, device=device)
+            #raw_Na_seen = set()
+            #raw_Nb_seen = set()
+            diagnostic_steps = 0
+            max_diagnostic_steps = 20
             while not done:
                 available_states = [s for s in all_b_states if all_visit_b_count_dict[s] < max_visits] # want the list of available states to keep updating each iteration
                 if not available_states:
@@ -207,6 +211,8 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     cur_b_state_img_array = np.array(cur_b_state_img) / 255.0
                     cur_b_state_img_tensor = torch.tensor(cur_b_state_img_array, dtype=torch.float32, device=device)
                     cur_neural_state_a, cur_neural_state_b, cur_I_aa, cur_I_ab, cur_I_bb, cur_I_ba = model(cur_b_state_img_tensor, cur_b_state_img_tensor, h_a, h_b)
+                    #raw_Na_seen.add(tuple(np.round(cur_neural_state_a.detach().cpu().numpy().reshape(-1), 6)))
+                    #raw_Nb_seen.add(tuple(np.round(cur_neural_state_b.detach().cpu().numpy().reshape(-1), 6)))
                     h_a = cur_neural_state_a
                     h_b = cur_neural_state_b
 
@@ -219,6 +225,15 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     next_b_state_img_array = np.array(next_b_state_img) / 255.0
                     next_b_state_img_tensor = torch.tensor(next_b_state_img_array, dtype=torch.float32, device=device)
                     next_neural_state_a, next_neural_state_b, next_I_aa, next_I_ab, next_I_bb, next_I_ba = model(next_b_state_img_tensor, next_b_state_img_tensor, h_a, h_b)
+                    #raw_Na_seen.add(tuple(np.round(next_neural_state_a.detach().cpu().numpy().reshape(-1), 6)))
+                    #raw_Nb_seen.add(tuple(np.round(next_neural_state_b.detach().cpu().numpy().reshape(-1), 6)))
+
+                    if diagnostic_steps < max_diagnostic_steps:
+                        input_a = model.in_current_a(next_b_state_img_tensor.reshape(1, -1))
+                        input_b = model.in_current_b(next_b_state_img_tensor.reshape(1, -1))
+                    #print(f"[Step {diagnostic_steps}] A input={input_a.abs().mean().item():.4f}, recurrent={next_I_aa.abs().mean().item():.4f}, raw cross={next_I_ba.abs().mean().item():.4f}, scaled cross={(model.cross_strength * next_I_ba).abs().mean().item():.4f}")
+                    #print(f"[Step {diagnostic_steps}] B input={input_b.abs().mean().item():.4f}, recurrent={next_I_bb.abs().mean().item():.4f}, raw cross={next_I_ab.abs().mean().item():.4f}, scaled cross={(model.cross_strength * next_I_ab).abs().mean().item():.4f}")                    
+                    diagnostic_steps += 1
                     h_a = next_neural_state_a
                     h_b = next_neural_state_b
                     cur_count = all_visit_b_count_dict[cur_b_state]
@@ -255,6 +270,15 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                     next_b_state_img_array = np.array(next_b_state_img) / 255.0
                     next_b_state_img_tensor = torch.tensor(next_b_state_img_array, dtype=torch.float32, device=device)
                     next_neural_state_a, next_neural_state_b, next_I_aa, next_I_ab, next_I_bb, next_I_ba = model(next_b_state_img_tensor, next_b_state_img_tensor, h_a, h_b)
+                    #raw_Na_seen.add(tuple(np.round(next_neural_state_a.detach().cpu().numpy().reshape(-1), 6)))
+                    #raw_Nb_seen.add(tuple(np.round(next_neural_state_b.detach().cpu().numpy().reshape(-1), 6)))
+
+                    if diagnostic_steps < max_diagnostic_steps:
+                        input_a = model.in_current_a(next_b_state_img_tensor.reshape(1, -1))
+                        input_b = model.in_current_b(next_b_state_img_tensor.reshape(1, -1))
+                        #print(f"[Step {diagnostic_steps}] A input={input_a.abs().mean().item():.4f}, recurrent={next_I_aa.abs().mean().item():.4f}, cross={next_I_ba.abs().mean().item():.4f}")
+                        #print(f"[Step {diagnostic_steps}] B input={input_b.abs().mean().item():.4f}, recurrent={next_I_bb.abs().mean().item():.4f}, cross={next_I_ab.abs().mean().item():.4f}")
+                    diagnostic_steps += 1
                     h_a = next_neural_state_a
                     h_b = next_neural_state_b
 
@@ -283,7 +307,10 @@ def generate_dicts(net, min_visits = 100, max_visits = 151, sd = 42):
                 done = min(all_visit_b_count_dict.values()) >= min_visits
 
         progress_bar.close()
-
+        #print("Unique raw Na states:", len(raw_Na_seen))
+        #print("Unique raw Nb states:", len(raw_Nb_seen))
+        #print("Unique binned Na states:", len(set(Na_transition_dict.keys()) | {n for nexts in Na_transition_dict.values() for n in nexts}))
+        #print("Unique binned Nb states:", len(set(Nb_transition_dict.keys()) | {n for nexts in Nb_transition_dict.values() for n in nexts}))
         save_b_transition = {k: dict(v) for k, v in b_transition_dict.items()}
         save_Na = {k: dict(v) for k, v in Na_transition_dict.items()}
         save_Nb = {k: dict(v) for k, v in Nb_transition_dict.items()}

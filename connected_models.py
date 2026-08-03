@@ -3,11 +3,12 @@ import torch.nn as nn
 
 
 class connected_models(nn.Module):
-    def __init__(self, in_size1=625, in_size2=625, hidden_size1=10, hidden_size2=20, num_inputs_next_layer=3):
+    def __init__(self, in_size1=625, in_size2=625, hidden_size1=10, hidden_size2=10, num_inputs_next_layer=3, cross_strength=0.1):
         super().__init__()
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
         self.num_inputs_next_layer = num_inputs_next_layer
+        self.cross_strength = cross_strength
 
         # connect the layers of the two networks.
         self.in_current_a = nn.Linear(in_size1, hidden_size1)
@@ -47,7 +48,7 @@ class connected_models(nn.Module):
         input_current_a = self.in_current_a(x_a)
         input_current_b = self.in_current_b(x_b)
 
-        h_a_next = torch.tanh(input_current_a + I_aa + I_ba)
-        h_b_next = torch.tanh(input_current_b + I_bb + I_ab)
+        h_a_next = torch.tanh(input_current_a + I_aa + self.cross_strength * I_ba)
+        h_b_next = torch.tanh(input_current_b + I_bb + self.cross_strength * I_ab)
 
         return h_a_next, h_b_next, I_aa, I_ab, I_bb, I_ba
