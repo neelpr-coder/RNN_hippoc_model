@@ -78,16 +78,15 @@ def load_cache(min_visits=100, max_visits=151, sd=42, bin_size=0.3):
             return n_state_dict, b_state_dict, pair_transition_dict
         raise FileNotFoundError("One or more cache files are missing.")
     
+def behavioral_state_to_vector(b_state):
+        x, y, heading_idx = b_state
+        theta = float(heading_idx) * (2 * np.pi / 4)
+        return np.array([x, y, np.cos(theta), np.sin(theta)], dtype=float)
 
 def convert_dict_to_matrix(cached_dict, dict_type=None):
     """
     Converts a dictionary of neural states into a matrix format suitable for manifold learning.
     """
-    def behavioral_state_to_vector(b_state):
-        x, y, heading_idx = b_state
-        theta = float(heading_idx) * (2 * np.pi / 4)
-        return np.array([x, y, np.cos(theta), np.sin(theta)], dtype=float)
-
     def paired_state_to_vector(pair_state):
         (B0, N0) = pair_state
         b_vector = behavioral_state_to_vector(B0)

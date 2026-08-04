@@ -16,6 +16,8 @@ if torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def transition_prob_from_counts(next_counts, next_key):
     total = sum(next_counts.values())
     if total == 0:
@@ -82,55 +84,41 @@ def get_connected_transition_keys(step):
         "Na_Nb_b": ((Na0, Nb0, B0), (Na1, Nb1, B1))
     }
 
-def calc_connected_stage2_error_history(route, original_dicts):
-    error_history = []
-    for frame, step in enumerate(route, start=1):
-        row = {"frame": frame}
-        transition_keys = get_connected_transition_keys(step)
-        for name in TRANSITION_LABELS:
-            current_state, route_next_state = transition_keys[name]
-            next_counts = original_dicts[name].get(current_state, {})
-            total = sum(next_counts.values())
-            if total == 0:
-                row[name] = np.nan
-                row[f"{name}_top1_prob"] = np.nan
-                row[f"{name}_route_prob"] = np.nan
-                row[f"{name}_top1_match"] = False
-                continue
-            top1_state, top1_count = max(next_counts.items(), key=lambda item: item[1])
-            top1_prob = top1_count / total
-            route_prob = next_counts.get(route_next_state, 0) / total
-            row[name] = top1_prob - route_prob
-            row[f"{name}_top1_prob"] = top1_prob
-            row[f"{name}_route_prob"] = route_prob
-            row[f"{name}_top1_match"] = top1_state == route_next_state
-        error_history.append(row)
-    return error_history
-
 def transition_probability_or_nan(next_counts, next_key):
     total = sum(next_counts.values())
     return np.nan if total == 0 else next_counts.get(next_key, 0) / total
 
-def calc_connected_stage3_error_history(route, original_dicts, updated_dicts):
+def calc_connected_stage3_error_history(route, updated_dicts):
     error_history = []
-    for frame, (B0, Na0, Nb0, B1, Na1, Nb1, observed_count) in enumerate(route, start=1):
-        transition_keys = {
-            "Na": (Na0, Na1),
-            "Nb": (Nb0, Nb1),
-            "Na_b": ((Na0, B0), (Na1, B1)),
-            "Nb_b": ((Nb0, B0), (Nb1, B1)),
-            "Na_Nb": ((Na0, Nb0), (Na1, Nb1)),
-            "Na_Nb_b": ((Na0, Nb0, B0), (Na1, Nb1, B1))
-        }
+
+    for frame, step in enumerate(route, start=1):
         row = {"frame": frame}
+        transition_keys = get_connected_transition_keys(step)
+
         for name in TRANSITION_LABELS:
-            cur_key, next_key = transition_keys[name]
-            original_prob = transition_probability_or_nan(original_dicts[name].get(cur_key, {}), next_key)
-            updated_prob = transition_probability_or_nan(updated_dicts[name].get(cur_key, {}), next_key)
-            row[name] = original_prob - updated_prob if not np.isnan(original_prob) and not np.isnan(updated_prob) else np.nan
-            row[f"{name}_original_prob"] = original_prob
-            row[f"{name}_updated_prob"] = updated_prob
+            current_state, route_next_state = transition_keys[name]
+            next_counts = updated_dicts[name].get(current_state, {})
+            total = sum(next_counts.values())
+
+            if total == 0:
+                row[name] = np.nan
+                row[f"{name}_top1_prob"] = np.nan
+                row[f"{name}_route_prob"] = np.nan
+                row[f"{name}_route_is_top1"] = False
+                continue
+
+            top1_state, top1_count = max(next_counts.items(), key=lambda item: item[1])
+            top1_prob = top1_count / total
+            route_prob = next_counts.get(route_next_state, 0) / total
+
+            row[name] = top1_prob - route_prob
+            row[f"{name}_top1_prob"] = top1_prob
+            row[f"{name}_route_prob"] = route_prob
+            row[f"{name}_top1_state"] = top1_state
+            row[f"{name}_route_is_top1"] = np.isclose(route_prob, top1_prob)
+
         error_history.append(row)
+
     return error_history
 
 def plot_connected_stage3_error(error_history, title="Connected RNN Stage 3 Error", save_path=None, ax=None):
@@ -144,7 +132,7 @@ def plot_connected_stage3_error(error_history, title="Connected RNN Stage 3 Erro
 
     ax.axhline(0.0, linestyle="--", linewidth=1)
     ax.set_xlabel("Time step along original route")
-    ax.set_ylabel("Probability error\n(original − perturbed)")
+    ax.set_ylabel("Stage 3 error\n(top-1 probability − route probability)")
     ax.set_title(title)
     ax.grid(alpha=0.25)
     ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
@@ -165,6 +153,45 @@ def plot_all_stage3_conditions(stage3_histories, save_path=None):
     axes[0].set_xlabel("")
     axes[1].set_xlabel("")
     fig.suptitle("Connected RNN Stage 3 Error", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stage 2 Error", save_path=None, ax=None):
+    created_figure = ax is None
+    if created_figure:
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+    frames = [row["frame"] for row in error_history]
+
+    for label in TRANSITION_LABELS:
+        ax.plot(frames, [row[label] for row in error_history], linewidth=1.5, label=label)
+
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xlabel("Perturbation step")
+    ax.set_ylabel("Stage 2 error\n(original top-1 − updated top-1)")
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+
+    if created_figure:
+        plt.tight_layout()
+        if save_path is not None:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.show()
+
+def plot_all_stage2_conditions(stage2_histories, save_path=None):
+    titles = {"a": "Region A Knockout", "b": "Region B Knockout", "both": "Regions A and B Knockout"}
+    fig, axes = plt.subplots(3, 1, figsize=(13, 16), sharex=True)
+
+    for ax, region in zip(axes, ("a", "b", "both")):
+        plot_connected_stage2_error_overlay(stage2_histories[region], title=titles[region], ax=ax)
+
+    axes[0].set_xlabel("")
+    axes[1].set_xlabel("")
+    fig.suptitle("Connected RNN Stage 2 Error", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.97])
 
     if save_path is not None:
@@ -260,41 +287,37 @@ def plot_euclidean_matrix(matrix, x_labels, y_labels, title, tick_step=10, cmap=
     plt.tight_layout()
     plt.show()
 
-def single_neural_dict_to_matrix(transition_dict):
+def connected_state_to_vector(state, dict_kind):
+    if dict_kind in ("Na", "Nb"):
+        return np.asarray(state, dtype=float)
+    if dict_kind == "B":
+        return mv.behavioral_state_to_vector(state)
+    if dict_kind in ("Na_b", "Nb_b"):
+        neural_state, behavioral_state = state
+        neural_vector = np.asarray(neural_state, dtype=float)
+        behavioral_vector = mv.behavioral_state_to_vector(behavioral_state)
+        return np.concatenate([neural_vector, behavioral_vector])
+    if dict_kind == "Na_Nb":
+        Na, Nb = state
+        return np.concatenate([np.asarray(Na, dtype=float), np.asarray(Nb, dtype=float)])
+    if dict_kind == "Na_Nb_b":
+        Na, Nb, B = state
+        return np.concatenate([np.asarray(Na, dtype=float), np.asarray(Nb, dtype=float), mv.behavioral_state_to_vector(B)])
+
+    raise ValueError("dict_kind must be 'Na', 'Nb', 'B', 'Na_b', 'Nb_b', 'Na_Nb', or 'Na_Nb_b'")
+
+def connected_dict_to_matrix(transition_dict, dict_kind):
     state_set = set()
 
-    for cur_state, next_states in transition_dict.items():
-        state_set.add(cur_state)
+    for current_state, next_states in transition_dict.items():
+        state_set.add(current_state)
         state_set.update(next_states.keys())
 
     state_keys = list(state_set)
-    matrix = np.array([np.asarray(state, dtype=float) for state in state_keys])
+    matrix = np.asarray([connected_state_to_vector(state, dict_kind) for state in state_keys], dtype=float)
 
     return matrix, state_keys
 
-def joint_Na_Nb_dict_to_matrix(transition_dict):
-    state_set = set()
-
-    for cur_state, next_states in transition_dict.items():
-        state_set.add(cur_state)
-        state_set.update(next_states.keys())
-
-    state_keys = list(state_set)
-    matrix = np.array([joint_Na_Nb_state_to_vector(state) for state in state_keys])
-
-    return matrix, state_keys
-
-def joint_Na_Nb_b_dict_to_matrix(transition_dict):
-    state_set = set()
-
-    for cur_state, next_states in transition_dict.items():
-        state_set.add(cur_state)
-        state_set.update(next_states.keys())
-
-    state_keys = list(state_set)
-    matrix = np.array([joint_Na_Nb_b_state_to_vector(state) for state in state_keys])
-
-    return matrix, state_keys
 
 def make_hashable_state(state):
     if isinstance(state, np.ndarray):
@@ -312,16 +335,25 @@ def make_hashable_state(state):
 def extract_connected_state_path(route_sequence, dict_kind):
     if len(route_sequence) == 0:
         return []
+
     B0, Na0, Nb0, _, _, _, _ = route_sequence[0]
+
+    if dict_kind == "B":
+        return [B0] + [B1 for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
     if dict_kind == "Na":
         return [Na0] + [Na1 for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
     if dict_kind == "Nb":
         return [Nb0] + [Nb1 for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
+    if dict_kind == "Na_b":
+        return [(Na0, B0)] + [(Na1, B1) for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
+    if dict_kind == "Nb_b":
+        return [(Nb0, B0)] + [(Nb1, B1) for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
     if dict_kind == "Na_Nb":
         return [(Na0, Nb0)] + [(Na1, Nb1) for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
     if dict_kind == "Na_Nb_b":
         return [(Na0, Nb0, B0)] + [(Na1, Nb1, B1) for B0, Na0, Nb0, B1, Na1, Nb1, count in route_sequence]
-    raise ValueError("dict_kind must be 'Na', 'Nb', 'Na_Nb', or 'Na_Nb_b'")
+
+    raise ValueError( "dict_kind must be 'Na', 'Nb', 'B', 'Na_b','Nb_b', 'Na_Nb', or 'Na_Nb_b'")
 
 def plot_3d_embedding(embedding, state_keys, transition_dict, route_sequence, dict_kind, title, method="tsne", save_path=None, visual_offset_fraction=0.015):
     actual_state_path = extract_connected_state_path(route_sequence, dict_kind)
@@ -387,19 +419,26 @@ def plot_3d_embedding(embedding, state_keys, transition_dict, route_sequence, di
     plt.show()
 
 def generate_manifold_from_dict(transition_dict, dict_kind, route_sequence, method="tsne", title=None, save_path=None):
-    if dict_kind in ("Na", "Nb"):
-        matrix, state_keys = single_neural_dict_to_matrix(transition_dict)
-    elif dict_kind == "Na_Nb":
-        matrix, state_keys = joint_Na_Nb_dict_to_matrix(transition_dict)
-    elif dict_kind == "Na_Nb_b":
-        matrix, state_keys = joint_Na_Nb_b_dict_to_matrix(transition_dict)
-    else:
-        raise ValueError("dict_kind must be 'Na', 'Nb', 'Na_Nb', or 'Na_Nb_b'")
+    valid_kinds = {"Na", "Nb", "B", "Na_b", "Nb_b", "Na_Nb", "Na_Nb_b"}
+
+    if dict_kind not in valid_kinds:
+        raise ValueError("dict_kind must be 'Na', 'Nb', 'B', 'Na_b', 'Nb_b', 'Na_Nb', or 'Na_Nb_b'")
+
+    matrix, state_keys = connected_dict_to_matrix(transition_dict, dict_kind)
+
+    if len(state_keys) < 4:
+        raise ValueError(
+            f"{dict_kind} contains only {len(state_keys)} unique states; "
+            "at least 4 are needed for a 3D embedding."
+        )
 
     embedding = mv.perform_manifold_learning(matrix, method=method, n_components=3)
+
     if title is None:
         title = f"{dict_kind} manifold ({method})"
+
     plot_3d_embedding(embedding, state_keys, transition_dict, route_sequence, dict_kind, title, method=method, save_path=save_path)
+
     return embedding, state_keys
 
 def connect_b_to_n(n_b_transition_dict):
@@ -419,7 +458,8 @@ if __name__ == "__main__":
     model.eval()
 
     b_transition_dict, all_visit_b_count_dict, Na_transition_dict, Nb_transition_dict, Na_Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_b_transition_dict = cme.generate_dicts(model)
-    original_dicts = {
+    route = generate_connected_route(Na_Nb_b_transition_dict, route_length=50, seed=42)
+    '''original_dicts = {
         "Na": Na_transition_dict,
         "Nb": Nb_transition_dict,
         "Na_b": Na_b_transition_dict,
@@ -427,7 +467,6 @@ if __name__ == "__main__":
         "Na_Nb": Na_Nb_transition_dict,
         "Na_Nb_b": Na_Nb_b_transition_dict
     }
-    route = generate_connected_route(Na_Nb_b_transition_dict, route_length=50, seed=42)
     perturbation_results = cme.run_connected_knockout_experiments(
                                                                     model,
                                                                     Na_transition_dict,
@@ -437,19 +476,29 @@ if __name__ == "__main__":
                                                                     Na_Nb_transition_dict,
                                                                     Na_Nb_b_transition_dict,
                                                                     total_perturbations=1000,
-                                                                    sd=42
+                                                                    sd=42,
+                                                                    save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache")
                                                                 )
-    stage3_histories = {}
+    stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
+    for region in ("a", "b", "both"):
+        plot_connected_stage2_error_overlay(
+            stage2_histories[region],
+            title=f"Stage 2 Error During {region.upper()} Knockout",
+            save_path=None
+        )
+    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")
 
+    stage3_histories = {}
     for region in ("a", "b", "both"):
         updated_dicts = perturbation_results[region]["dicts"]
-        stage3_histories[region] = calc_connected_stage3_error_history(route, original_dicts, updated_dicts)
+        stage3_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
         plot_connected_stage3_error(
             stage3_histories[region],
             title=f"Stage 3 Error After {region.upper()} Knockout",
-            save_path=f"connected_stage3_error_{region}.png"
+            save_path=None
         )
-    plot_all_stage3_conditions(stage3_histories, save_path="connected_stage3_error_all_conditions.png")
+    plot_all_stage3_conditions(stage3_histories, save_path="connected_stage3_error_all_conditions.png")'''
+
     #Na_matrix, Na_keys = single_neural_dict_to_matrix(Na_transition_dict)
     #Nb_matrix, Nb_keys = single_neural_dict_to_matrix(Nb_transition_dict)
     '''print("Unique Na states:", len(Na_keys), "matrix:", Na_matrix.shape)
@@ -464,7 +513,7 @@ if __name__ == "__main__":
     #_, _, _ = f2g.n_state_distribution_heatmap(rearranged_b_Nb)
 
     #stage2_error_history = calc_connected_stage2_error_history(route, original_dicts)
-    #plot_connected_error_overlay(stage2_error_history, title="Stage 2 Error Before Perturbation", save_path=None)
+    #plot_connected_stage_2_error_overlay(stage2_error_history, title="Stage 2 Error Before Perturbation", save_path=None)
 
     #pearson_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(Na_transition_dict, Nb_transition_dict, top_k=100, metric="pearson")
     #plot_pearson_matrix(pearson_matrix, x_labels, y_labels, title="Pearson Correlation: RNN A vs RNN B", tick_step=10)
@@ -479,4 +528,13 @@ if __name__ == "__main__":
     generate_manifold_from_dict(Na_Nb_transition_dict, dict_kind="Na_Nb", route_sequence=route, method="umap", title="Joint A-B Neural Transition Manifold")
     generate_manifold_from_dict(Na_transition_dict, dict_kind="Na", route_sequence=route, method="pca", title="RNN A Transition Neural Manifold")
     generate_manifold_from_dict(Nb_transition_dict, dict_kind="Nb", route_sequence=route, method="pca", title="RNN B Neural Transition Manifold")
-    generate_manifold_from_dict(Na_Nb_transition_dict, dict_kind="Na_Nb", route_sequence=route, method="pca", title="Joint A-B Neural Transition Manifold")'''
+    generate_manifold_from_dict(Na_Nb_transition_dict, dict_kind="Na_Nb", route_sequence=route, method="pca", title="Joint A-B Neural Transition Manifold")
+    generate_manifold_from_dict(Na_b_transition_dict, dict_kind="Na_b", route_sequence=route, method="tsne", title="RNN A & Behavioral State Transition t-SNE Manifold")
+    generate_manifold_from_dict(Na_b_transition_dict, dict_kind="Na_b", route_sequence=route, method="umap", title="RNN A & Behavioral State Transition UMAP Manifold")
+    generate_manifold_from_dict(Na_b_transition_dict, dict_kind="Na_b", route_sequence=route, method="pca", title="RNN A & Behavioral State Transition PCA Manifold")
+    generate_manifold_from_dict(Nb_b_transition_dict, dict_kind="Nb_b", route_sequence=route, method="tsne", title="RNN B & Behavioral State Transition t-SNE Manifold")
+    generate_manifold_from_dict(Nb_b_transition_dict, dict_kind="Nb_b", route_sequence=route, method="umap", title="RNN B & Behavioral State Transition UMAP Manifold")
+    generate_manifold_from_dict(Nb_b_transition_dict, dict_kind="Nb_b", route_sequence=route, method="pca", title="RNN B & Behavioral State Transition PCA Manifold")
+    generate_manifold_from_dict(Na_Nb_b_transition_dict, dict_kind="Na_Nb_b", route_sequence=route, method="tsne", title="RNN A, RNN B, & Behavioral State Transition t-SNE Manifold")
+    generate_manifold_from_dict(Na_Nb_b_transition_dict, dict_kind="Na_Nb_b", route_sequence=route, method="umap", title="RNN A, RNN B, & Behavioral State Transition UMAP Manifold")
+    generate_manifold_from_dict(Na_Nb_b_transition_dict, dict_kind="Na_Nb_b", route_sequence=route, method="pca", title="RNN A, RNN B, & Behavioral State Transition PCA Manifold")'''

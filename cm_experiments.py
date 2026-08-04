@@ -447,6 +447,8 @@ def run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_
     for region in ("a", "b", "both"):
         updated_dicts = {name: copy_transition_dict(dictionary) for name, dictionary in original_dicts.items()}
         perturbed_route = []
+        stage2_error_history = []
+
         h_a = torch.zeros(1, model.hidden_size1, device=model_device)
         h_b = torch.zeros(1, model.hidden_size2, device=model_device)
 
@@ -458,6 +460,7 @@ def run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_
             for step, neuron_index in enumerate(neuron_schedule):
                 next_b_state, next_image = sequence[step + 1]
                 handle = model.knockout_neuron(int(neuron_index), region=region)
+
                 try:
                     next_Na, next_Nb, _, _, _, _ = model(next_image, next_image, h_a, h_b)
                 finally:
@@ -477,18 +480,47 @@ def run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_
                 updated_dicts["Na_Nb"][(current_Na_key, current_Nb_key)][(next_Na_key, next_Nb_key)] += 1
                 updated_dicts["Na_Nb_b"][(current_Na_key, current_Nb_key, current_B_key)][(next_Na_key, next_Nb_key, next_B_key)] += 1
 
-                perturbed_route.append((current_B_key, current_Na_key, current_Nb_key, next_B_key, next_Na_key, next_Nb_key, 1))
-                current_b_state, current_Na, current_Nb = next_b_state, next_Na, next_Nb
+                stage2_error_history.append(
+                    pt.calc_stage2_error(
+                        frame=step + 1,
+                        B0=current_B_key,
+                        Na0=current_Na_key,
+                        Nb0=current_Nb_key,
+                        original_connected_dicts=original_dicts,
+                        updated_connected_dicts=updated_dicts
+                    )
+                )
+
+                perturbed_route.append((
+                    current_B_key,
+                    current_Na_key,
+                    current_Nb_key,
+                    next_B_key,
+                    next_Na_key,
+                    next_Nb_key,
+                    1
+                ))
+
+                current_b_state = next_b_state
+                current_Na, current_Nb = next_Na, next_Nb
                 h_a, h_b = next_Na, next_Nb
 
-        results[region] = {"dicts": updated_dicts, "route": perturbed_route, "neuron_counts": neuron_counts.copy()}
+        results[region] = {
+            "dicts": updated_dicts,
+            "route": perturbed_route,
+            "neuron_counts": neuron_counts.copy(),
+            "stage2_error_history": stage2_error_history
+        }
+
         print(f"[Log] Completed {total_perturbations} knockouts for region={region}")
         print(f"[Log] Neuron knockout counts: {neuron_counts.tolist()}")
+        print(f"[Log] Stage 2 error entries: {len(stage2_error_history)}")
 
         if save_dir is not None:
             _save_perturbed_result(results[region], region, total_perturbations, sd, save_dir)
 
     original_totals_after = {name: transition_count(dictionary) for name, dictionary in original_dicts.items()}
+
     if original_totals_before != original_totals_after:
         raise RuntimeError("An original transition dictionary was modified.")
 

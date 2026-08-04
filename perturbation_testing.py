@@ -43,7 +43,88 @@ def inner_dict():
 def outer_dict():
     return defaultdict(inner_dict)
 
-def calc_stage2_error(frame, B0, N0, original_b_dict, original_n_dict, original_pair_dict, updated_b_dict, updated_n_dict, updated_pair_dict):
+def calc_stage2_error(
+    frame,
+    B0,
+    N0=None,
+    original_b_dict=None,
+    original_n_dict=None,
+    original_pair_dict=None,
+    updated_b_dict=None,
+    updated_n_dict=None,
+    updated_pair_dict=None,
+    Na0=None,
+    Nb0=None,
+    original_connected_dicts=None,
+    updated_connected_dicts=None
+):
+    # Connected RNN
+    if original_connected_dicts is not None or updated_connected_dicts is not None:
+        if original_connected_dicts is None or updated_connected_dicts is None:
+            raise ValueError("Both original_connected_dicts and updated_connected_dicts are required.")
+        if Na0 is None or Nb0 is None:
+            raise ValueError("Na0 and Nb0 are required for connected-RNN Stage 2 error.")
+
+        current_keys = {
+            "Na": Na0,
+            "Nb": Nb0,
+            "Na_b": (Na0, B0),
+            "Nb_b": (Nb0, B0),
+            "Na_Nb": (Na0, Nb0),
+            "Na_Nb_b": (Na0, Nb0, B0)
+        }
+
+        row = {
+            "frame": frame,
+            "B0": B0,
+            "Na0": Na0,
+            "Nb0": Nb0
+        }
+
+        for name, current_key in current_keys.items():
+            original_next = original_connected_dicts[name].get(current_key, {})
+            updated_next = updated_connected_dicts[name].get(current_key, {})
+
+            if len(original_next) == 0:
+                original_top_prob = np.nan
+                original_top = None
+            else:
+                original_top_prob, original_top, _, _ = f2g.top_choice_prob(original_next)
+
+            if len(updated_next) == 0:
+                updated_top_prob = np.nan
+                updated_top = None
+            else:
+                updated_top_prob, updated_top, _, _ = f2g.top_choice_prob(updated_next)
+
+            if np.isnan(original_top_prob) or np.isnan(updated_top_prob):
+                raw_error = np.nan
+            else:
+                raw_error = original_top_prob - updated_top_prob
+
+            row[name] = raw_error
+            row[f"{name}_original_top_probability"] = original_top_prob
+            row[f"{name}_updated_top_probability"] = updated_top_prob
+            row[f"{name}_original_top"] = original_top
+            row[f"{name}_updated_top"] = updated_top
+            row[f"{name}_top_changed"] = original_top != updated_top
+            row[f"{name}_original_key_present"] = current_key in original_connected_dicts[name]
+
+        return row
+
+    # single RNN
+    required_dicts = [
+        original_b_dict,
+        original_n_dict,
+        original_pair_dict,
+        updated_b_dict,
+        updated_n_dict,
+        updated_pair_dict
+    ]
+
+    if N0 is None or any(dictionary is None for dictionary in required_dicts):
+        raise ValueError("N0 and all original/updated B, N, and pair dictionaries are required.")
+
     original_b_next = original_b_dict.get(B0, {})
     original_n_next = original_n_dict.get(N0, {})
     original_pair_next = original_pair_dict.get((B0, N0), {})
@@ -52,59 +133,40 @@ def calc_stage2_error(frame, B0, N0, original_b_dict, original_n_dict, original_
     updated_n_next = updated_n_dict.get(N0, {})
     updated_pair_next = updated_pair_dict.get((B0, N0), {})
 
-    # Top probabilities from original dictionaries.
     original_b_top_prob, original_b_top, _, _ = f2g.top_choice_prob(original_b_next)
     original_n_top_prob, original_n_top, _, _ = f2g.top_choice_prob(original_n_next)
     original_pair_top_prob, original_pair_top, _, _ = f2g.top_choice_prob(original_pair_next)
 
-    # Top probabilities from updated dictionaries.
     updated_b_top_prob, updated_b_top, _, _ = f2g.top_choice_prob(updated_b_next)
     updated_n_top_prob, updated_n_top, _, _ = f2g.top_choice_prob(updated_n_next)
     updated_pair_top_prob, updated_pair_top, _, _ = f2g.top_choice_prob(updated_pair_next)
-    
-    # Independent probability
+
     original_best_probability = original_b_top_prob * original_n_top_prob
     updated_best_probability = updated_b_top_prob * updated_n_top_prob
     raw_error = original_best_probability - updated_best_probability
 
-    # Direct paired-transition comparison.
     pair_raw_error = original_pair_top_prob - updated_pair_top_prob
 
-    # Use the original choice space so the denominator stays fixed.
     C = len(original_b_next) + len(original_n_next) + len(original_pair_next)
-    
     normalized_error = raw_error / C if C > 0 else 0.0
     normalized_pair_error = pair_raw_error / C if C > 0 else 0.0
-    
+
     return {
         "frame": frame,
         "B0": B0,
         "N0": N0,
-
-        "original_best_probability":
-            original_best_probability,
-
-        "updated_best_probability":
-            updated_best_probability,
-
+        "original_best_probability": original_best_probability,
+        "updated_best_probability": updated_best_probability,
         "raw_error": raw_error,
         "normalized_error": normalized_error,
-
-        "original_pair_top_probability":
-            original_pair_top_prob,
-
-        "updated_pair_top_probability":
-            updated_pair_top_prob,
-
+        "original_pair_top_probability": original_pair_top_prob,
+        "updated_pair_top_probability": updated_pair_top_prob,
         "pair_raw_error": pair_raw_error,
         "normalized_pair_error": normalized_pair_error,
-
         "C": C,
-
         "original_b_top": original_b_top,
         "original_n_top": original_n_top,
         "original_pair_top": original_pair_top,
-
         "updated_b_top": updated_b_top,
         "updated_n_top": updated_n_top,
         "updated_pair_top": updated_pair_top
