@@ -52,3 +52,23 @@ class connected_models(nn.Module):
         h_b_next = torch.tanh(input_current_b + I_bb + self.cross_strength * I_ab)
 
         return h_a_next, h_b_next, I_aa, I_ab, I_bb, I_ba
+
+    def knockout_neuron(self, index, region="both"):
+        if region not in ("a", "b", "both"):
+            raise ValueError("region must be 'a', 'b', or 'both'")
+        if region in ("a", "both") and not 0 <= index < self.hidden_size1:
+            raise IndexError(f"RNN A index {index} is outside [0, {self.hidden_size1 - 1}]")
+        if region in ("b", "both") and not 0 <= index < self.hidden_size2:
+            raise IndexError(f"RNN B index {index} is outside [0, {self.hidden_size2 - 1}]")
+
+        def knockout_hook(module, inputs, output):
+            h_a, h_b, I_aa, I_ab, I_bb, I_ba = output
+            perturbed_h_a = h_a.clone()
+            perturbed_h_b = h_b.clone()
+
+            if region in ("a", "both"):
+                perturbed_h_a[..., index] = 0.0
+            if region in ("b", "both"):
+                perturbed_h_b[..., index] = 0.0
+            return perturbed_h_a, perturbed_h_b, I_aa, I_ab, I_bb, I_ba
+        return self.register_forward_hook(knockout_hook)
