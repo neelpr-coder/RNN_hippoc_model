@@ -22,3 +22,4 @@ post_stage1_connected_model_sd42.pt
 Perturbation_Connected_Cache
 connected_stage2_error_all_conditions.png
 connected_stage3_error_all_conditions.png
+change_in_error_post_pre_perturb_connected_model.png

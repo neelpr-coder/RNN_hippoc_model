@@ -447,6 +447,93 @@ def connect_b_to_n(n_b_transition_dict):
         b_to_n_connected[b_state].add(n_state)
     return b_to_n_connected
 
+def calc_connected_error_change(pre_error_history, post_error_history):
+    if len(pre_error_history) != len(post_error_history):
+        raise ValueError(f"History lengths differ: pre={len(pre_error_history)} post={len(post_error_history)}")
+
+    change_history = []
+
+    for pre_row, post_row in zip(pre_error_history, post_error_history):
+        if pre_row["frame"] != post_row["frame"]:
+            raise ValueError(
+                f"Frame mismatch: pre={pre_row['frame']}, "
+                f"post={post_row['frame']}"
+            )
+
+        row = {"frame": pre_row["frame"]}
+
+        for label in TRANSITION_LABELS:
+            pre_error = pre_row[label]
+            post_error = post_row[label]
+
+            if np.isnan(pre_error) or np.isnan(post_error):
+                error_change = np.nan
+            else:
+                error_change = post_error - pre_error
+
+            row[label] = error_change
+            row[f"{label}_pre_error"] = pre_error
+            row[f"{label}_post_error"] = post_error
+
+        change_history.append(row)
+
+    return change_history
+
+def plot_connected_error_change(error_history, title="Change in Route Error", save_path=None, ax=None):
+    created_figure = ax is None
+
+    if created_figure:
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+    frames = [row["frame"] for row in error_history]
+
+    for label in TRANSITION_LABELS:
+        values = [row[label] for row in error_history]
+        ax.plot(
+            frames,
+            values,
+            marker="o",
+            markersize=3,
+            linewidth=1.5,
+            label=label
+        )
+
+    ax.axhline(0.0, linestyle="--", linewidth=1)
+    ax.set_xlabel("Time step along original route")
+    ax.set_ylabel("Change in error\n(post − pre)")
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+
+    if created_figure:
+        plt.tight_layout()
+
+        if save_path is not None:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        plt.show()
+
+def plot_all_error_change_conditions(error_change_histories, save_path=None):
+    titles = {"a": "Region A Knockout", "b": "Region B Knockout", "both": "Regions A and B Knockout"}
+    fig, axes = plt.subplots(3, 1, figsize=(13, 16), sharex=True)
+
+    for ax, region in zip(axes, ("a", "b", "both")):
+        plot_connected_error_change(
+            error_change_histories[region],
+            title=titles[region],
+            ax=ax
+        )
+
+    axes[0].set_xlabel("")
+    axes[1].set_xlabel("")
+    fig.suptitle("Change in Fixed-Route Error After Knockout", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
 if __name__ == "__main__":
     SEED = 42
     torch.manual_seed(SEED)
@@ -459,7 +546,19 @@ if __name__ == "__main__":
 
     b_transition_dict, all_visit_b_count_dict, Na_transition_dict, Nb_transition_dict, Na_Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_b_transition_dict = cme.generate_dicts(model)
     route = generate_connected_route(Na_Nb_b_transition_dict, route_length=50, seed=42)
-    '''original_dicts = {
+    perturbation_results = cme.run_connected_knockout_experiments(
+                                                                        model,
+                                                                        Na_transition_dict,
+                                                                        Nb_transition_dict,
+                                                                        Na_b_transition_dict,
+                                                                        Nb_b_transition_dict,
+                                                                        Na_Nb_transition_dict,
+                                                                        Na_Nb_b_transition_dict,
+                                                                        total_perturbations=1000,
+                                                                        sd=42,
+                                                                        save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache")
+                                                                    )
+    original_dicts = {
         "Na": Na_transition_dict,
         "Nb": Nb_transition_dict,
         "Na_b": Na_b_transition_dict,
@@ -467,18 +566,18 @@ if __name__ == "__main__":
         "Na_Nb": Na_Nb_transition_dict,
         "Na_Nb_b": Na_Nb_b_transition_dict
     }
-    perturbation_results = cme.run_connected_knockout_experiments(
-                                                                    model,
-                                                                    Na_transition_dict,
-                                                                    Nb_transition_dict,
-                                                                    Na_b_transition_dict,
-                                                                    Nb_b_transition_dict,
-                                                                    Na_Nb_transition_dict,
-                                                                    Na_Nb_b_transition_dict,
-                                                                    total_perturbations=1000,
-                                                                    sd=42,
-                                                                    save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache")
-                                                                )
+
+    pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
+
+    post_error_histories = {}
+    error_change_histories = {}
+
+    for region in ("a", "b", "both"):
+        updated_dicts = perturbation_results[region]["dicts"]
+        post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
+        error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
+    plot_all_error_change_conditions(error_change_histories, save_path="change_in_error_post_pre_perturb_connected_model.png")
+    '''
     stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
         plot_connected_stage2_error_overlay(
