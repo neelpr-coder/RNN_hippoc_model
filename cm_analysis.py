@@ -3,7 +3,7 @@ import random
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from collections import defaultdict
+from collections import defaultdict, Counter 
 import perturbation_testing as pt
 import cm_experiments as cme
 import connected_models as cm
@@ -84,11 +84,7 @@ def get_connected_transition_keys(step):
         "Na_Nb_b": ((Na0, Nb0, B0), (Na1, Nb1, B1))
     }
 
-def transition_probability_or_nan(next_counts, next_key):
-    total = sum(next_counts.values())
-    return np.nan if total == 0 else next_counts.get(next_key, 0) / total
-
-def calc_connected_stage3_error_history(route, updated_dicts):
+def calc_connected_stage3_error_history(route, transition_dicts):
     error_history = []
 
     for frame, step in enumerate(route, start=1):
@@ -97,17 +93,26 @@ def calc_connected_stage3_error_history(route, updated_dicts):
 
         for name in TRANSITION_LABELS:
             current_state, route_next_state = transition_keys[name]
-            next_counts = updated_dicts[name].get(current_state, {})
+            next_counts = transition_dicts[name].get(current_state, {})
+
+            C = len(next_counts)
             total = sum(next_counts.values())
 
-            if total == 0:
-                row[name] = np.nan
-                row[f"{name}_top1_prob"] = np.nan
-                row[f"{name}_route_prob"] = np.nan
+            row[f"{name}_C"] = C
+
+            if C == 0 or total == 0:
+                row[name] = 0.0
+                row[f"{name}_top1_prob"] = 0.0
+                row[f"{name}_route_prob"] = 0.0
                 row[f"{name}_route_is_top1"] = False
+                row[f"{name}_false_zero"] = True
                 continue
 
-            top1_state, top1_count = max(next_counts.items(), key=lambda item: item[1])
+            top1_state, top1_count = max(
+                next_counts.items(),
+                key=lambda item: item[1]
+            )
+
             top1_prob = top1_count / total
             route_prob = next_counts.get(route_next_state, 0) / total
 
@@ -116,6 +121,7 @@ def calc_connected_stage3_error_history(route, updated_dicts):
             row[f"{name}_route_prob"] = route_prob
             row[f"{name}_top1_state"] = top1_state
             row[f"{name}_route_is_top1"] = np.isclose(route_prob, top1_prob)
+            row[f"{name}_false_zero"] = False
 
         error_history.append(row)
 
@@ -534,6 +540,177 @@ def plot_all_error_change_conditions(error_change_histories, save_path=None):
 
     plt.show()
 
+
+
+def get_b_distribution_from_dict(b_transition_dict):
+    counts = Counter()
+
+    for current_B, next_states in b_transition_dict.items():
+        counts[current_B] += sum(next_states.values())
+
+    return counts
+
+def get_b_distribution_from_route(route):
+    counts = Counter()
+
+    for B0, Na0, Nb0, B1, Na1, Nb1, count in route:
+        counts[B0] += 1
+
+    if len(route) > 0:
+        counts[route[-1][3]] += 1
+
+    return counts
+
+def plot_b_distribution_pre_post(b_transition_dict, perturbed_route, title="Behavioral State Distribution Pre/Post Perturbation"):
+    pre_counts = get_b_distribution_from_dict(b_transition_dict)
+    post_counts = get_b_distribution_from_route(perturbed_route)
+
+    states = sorted(set(pre_counts) | set(post_counts), key=str)
+
+    pre_values = np.array([pre_counts[state] for state in states], dtype=float)
+    post_values = np.array([post_counts[state] for state in states], dtype=float)
+
+    pre_values /= pre_values.sum()
+    post_values /= post_values.sum()
+
+    x = np.arange(len(states))
+    width = 0.42
+
+    plt.figure(figsize=(18, 7))
+    plt.bar(x - width / 2, pre_values, width, label="Pre-perturbation")
+    plt.bar(x + width / 2, post_values, width, label="Perturbation sequence")
+
+    plt.xlabel("Behavioral state")
+    plt.ylabel("State probability")
+    plt.title(title)
+    plt.xticks(x, [str(state) for state in states], rotation=90, fontsize=6)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+
+def calc_signed_errors_by_step_bin(error_history, bin_size=200):
+    summaries = []
+
+    for start in range(0, len(error_history), bin_size):
+        chunk = error_history[start:start + bin_size]
+        positive_counts = []
+        negative_counts = []
+        for label in TRANSITION_LABELS:
+            positive_count = 0
+            negative_count = 0
+            for row in chunk:
+                if row.get(f"{label}_false_zero", False):
+                    continue
+                error = row[label]
+                if error > 0:
+                    positive_count += 1
+                elif error < 0:
+                    negative_count += 1
+
+            positive_counts.append(positive_count)
+            negative_counts.append(negative_count)
+        summaries.append({"start": start + 1, "end": start + len(chunk), "positive": np.mean(positive_counts), "negative": np.mean(negative_counts)})
+    return summaries
+
+def plot_signed_errors_histogram(error_history, bin_size=200, title="Pre/Post Perturbation Error Direction", save_path=None):
+    summaries = calc_signed_errors_by_step_bin(error_history, bin_size=bin_size)
+
+    labels = [f"{row['start']}-{row['end']}" for row in summaries]
+    positive = [row["positive"] for row in summaries]
+    negative = [row["negative"] for row in summaries]
+
+    x = np.arange(len(labels))
+    width = 0.4
+
+    plt.figure(figsize=(16, 7))
+    plt.bar(x - width / 2, positive, width, label="Positive error (pre > post)")
+    plt.bar(x + width / 2, negative, width, label="Negative error (post > pre)")
+
+    plt.xlabel("Perturbation-step range")
+    plt.ylabel("Average number of errors across dictionaries")
+    plt.title(title)
+    plt.xticks(x, labels, rotation=45, ha="right")
+    plt.legend()
+    plt.grid(axis="y", alpha=0.25)
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
+def collect_route_error_distribution(error_history):
+    nonzero_errors = []
+    true_zero_count = 0
+    false_zero_count = 0
+
+    for row in error_history:
+        for label in TRANSITION_LABELS:
+            error = row[label]
+            false_zero = row.get(f"{label}_false_zero", row[f"{label}_C"] == 0)
+
+            if false_zero:
+                false_zero_count += 1
+            elif np.isclose(error, 0.0):
+                true_zero_count += 1
+            else:
+                nonzero_errors.append(error)
+
+    return np.asarray(nonzero_errors, dtype=float), true_zero_count, false_zero_count
+
+def plot_pre_post_error_distribution(pre_history, post_history, error_bin_width=0.05, title="Error Distribution Pre/Post Perturbation", save_path=None):
+    pre_values, pre_true_zero, pre_false_zero = collect_route_error_distribution(pre_history)
+    post_values, post_true_zero, post_false_zero = collect_route_error_distribution(post_history)
+
+    all_values = np.concatenate([pre_values, post_values])
+
+    if len(all_values) > 0:
+        lower = np.floor(all_values.min() / error_bin_width) * error_bin_width
+        upper = np.ceil(all_values.max() / error_bin_width) * error_bin_width
+
+        if np.isclose(lower, upper):
+            upper = lower + error_bin_width
+
+        bins = np.arange(lower, upper + error_bin_width, error_bin_width)
+
+        pre_hist, edges = np.histogram(pre_values, bins=bins)
+        post_hist, _ = np.histogram(post_values, bins=bins)
+
+        error_labels = [
+            f"{edges[i]:.2f}-{edges[i + 1]:.2f}"
+            for i in range(len(edges) - 1)
+        ]
+    else:
+        pre_hist = np.array([], dtype=int)
+        post_hist = np.array([], dtype=int)
+        error_labels = []
+
+    labels = error_labels + ["True zero\n(C > 0)", "False zero\n(C = 0)"]
+
+    pre_counts = np.concatenate([pre_hist,[pre_true_zero, pre_false_zero]])
+    post_counts = np.concatenate([post_hist, [post_true_zero, post_false_zero]])
+
+    x = np.arange(len(labels))
+    width = 0.4
+
+    plt.figure(figsize=(16, 7))
+    plt.bar(x - width / 2, pre_counts, width, label="Pre-perturbation")
+    plt.bar(x + width / 2, post_counts, width, label="Post-perturbation")
+    plt.xlabel("Error range")
+    plt.ylabel("Number of errors")
+    plt.title(title)
+    plt.xticks(x, labels, rotation=45, ha="right")
+    plt.legend()
+    plt.grid(axis="y", alpha=0.25)
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
 if __name__ == "__main__":
     SEED = 42
     torch.manual_seed(SEED)
@@ -544,30 +721,48 @@ if __name__ == "__main__":
     model.load_state_dict(state_dict)
     model.eval()
 
+
     b_transition_dict, all_visit_b_count_dict, Na_transition_dict, Nb_transition_dict, Na_Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_b_transition_dict = cme.generate_dicts(model)
     route = generate_connected_route(Na_Nb_b_transition_dict, route_length=50, seed=42)
-    perturbation_results = cme.run_connected_knockout_experiments(
-                                                                        model,
-                                                                        Na_transition_dict,
-                                                                        Nb_transition_dict,
-                                                                        Na_b_transition_dict,
-                                                                        Nb_b_transition_dict,
-                                                                        Na_Nb_transition_dict,
-                                                                        Na_Nb_b_transition_dict,
-                                                                        total_perturbations=1000,
-                                                                        sd=42,
-                                                                        save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache")
-                                                                    )
     original_dicts = {
-        "Na": Na_transition_dict,
-        "Nb": Nb_transition_dict,
-        "Na_b": Na_b_transition_dict,
-        "Nb_b": Nb_b_transition_dict,
-        "Na_Nb": Na_Nb_transition_dict,
-        "Na_Nb_b": Na_Nb_b_transition_dict
-    }
-
+            "Na": Na_transition_dict,
+            "Nb": Nb_transition_dict,
+            "Na_b": Na_b_transition_dict,
+            "Nb_b": Nb_b_transition_dict,
+            "Na_Nb": Na_Nb_transition_dict,
+            "Na_Nb_b": Na_Nb_b_transition_dict
+        }
     pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
+
+    perturbation_results = cme.run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_transition_dict, Na_Nb_b_transition_dict, total_perturbations=4000, sd=42, save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache"))
+
+    stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
+    for region in ("a", "b", "both"):
+        plot_connected_stage2_error_overlay(stage2_histories[region], title=f"Stage 2 Error During {region.upper()} Knockout", save_path=None)
+    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions_4000.png")
+
+    for region in ("a", "b", "both"):
+        plot_signed_errors_histogram(stage2_histories[region], bin_size=200, title=f"{region.upper()} Knockout: Positive/Negative Errors per 200 Perturbations", save_path=None)
+
+    post_error_histories = {}
+    error_change_histories = {}
+
+    for region in ("a", "b", "both"):
+        updated_dicts = perturbation_results[region]["dicts"]
+        post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
+        error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
+
+    for region in ("a", "b", "both"):
+        plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)
+
+    '''for region in ("a", "b", "both"):
+        plot_connected_error_change(error_change_histories[region], title=f"{region.upper()} Knockout: Change in Fixed-Route Error", save_path=None)
+
+    plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")'''
+    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution Pre/Post Perturbation")
+
+
+    '''pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
     post_error_histories = {}
     error_change_histories = {}
@@ -577,7 +772,7 @@ if __name__ == "__main__":
         post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
         error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
     plot_all_error_change_conditions(error_change_histories, save_path="change_in_error_post_pre_perturb_connected_model.png")
-    '''
+    
     stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
         plot_connected_stage2_error_overlay(
@@ -585,8 +780,9 @@ if __name__ == "__main__":
             title=f"Stage 2 Error During {region.upper()} Knockout",
             save_path=None
         )
-    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")
-
+    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")'''
+    
+    '''
     stage3_histories = {}
     for region in ("a", "b", "both"):
         updated_dicts = perturbation_results[region]["dicts"]

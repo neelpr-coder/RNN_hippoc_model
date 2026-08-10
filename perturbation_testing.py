@@ -84,21 +84,28 @@ def calc_stage2_error(
         for name, current_key in current_keys.items():
             original_next = original_connected_dicts[name].get(current_key, {})
             updated_next = updated_connected_dicts[name].get(current_key, {})
+            original_C = len(original_next)
+            updated_C = len(updated_next)
 
-            if len(original_next) == 0:
-                original_top_prob = np.nan
+            row[f"{name}_original_C"] = original_C
+            row[f"{name}_updated_C"] = updated_C
+
+            if original_C == 0:
+                original_top_prob = 0.0
                 original_top = None
             else:
                 original_top_prob, original_top, _, _ = f2g.top_choice_prob(original_next)
 
-            if len(updated_next) == 0:
-                updated_top_prob = np.nan
+            if updated_C == 0:
+                updated_top_prob = 0.0
                 updated_top = None
             else:
                 updated_top_prob, updated_top, _, _ = f2g.top_choice_prob(updated_next)
 
-            if np.isnan(original_top_prob) or np.isnan(updated_top_prob):
-                raw_error = np.nan
+            false_zero = original_C == 0 or updated_C == 0
+
+            if false_zero:
+                raw_error = 0.0
             else:
                 raw_error = original_top_prob - updated_top_prob
 
@@ -109,6 +116,7 @@ def calc_stage2_error(
             row[f"{name}_updated_top"] = updated_top
             row[f"{name}_top_changed"] = original_top != updated_top
             row[f"{name}_original_key_present"] = current_key in original_connected_dicts[name]
+            row[f"{name}_false_zero"] = false_zero
 
         return row
 
@@ -518,51 +526,19 @@ def calc_stage3_error(route_sequence, original_b_dict, original_n_dict, original
     return error_history
 
 def plot_normalized_error_over_time(error_history, title, x_label, include_pair_error=False, save_path=None, show_points=True):
-    frames = [
-        item["frame"]
-        for item in error_history
-    ]
-
-    normalized_errors = [
-        item["normalized_error"]
-        for item in error_history
-    ]
+    frames = [item["frame"] for item in error_history]
+    normalized_errors = [item["normalized_error"] for item in error_history]
 
     marker = "o" if show_points else None
 
     plt.figure(figsize=(11, 5.5))
-
-    plt.plot(
-        frames,
-        normalized_errors,
-        marker=marker,
-        markersize=3,
-        linewidth=1.6,
-        label="Independent transition error"
-    )
+    plt.plot(frames, normalized_errors, marker=marker, markersize=3, linewidth=1.6, label="Independent transition error")
 
     if include_pair_error:
-        normalized_pair_errors = [
-            item["normalized_pair_error"]
-            for item in error_history
-        ]
+        normalized_pair_errors = [item["normalized_pair_error"] for item in error_history]
+        plt.plot(frames, normalized_pair_errors, marker=marker, markersize=3, linewidth=1.6, label="Paired transition error")
 
-        plt.plot(
-            frames,
-            normalized_pair_errors,
-            marker=marker,
-            markersize=3,
-            linewidth=1.6,
-            label="Paired transition error"
-        )
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1.0,
-        alpha=0.6
-    )
-
+    plt.axhline(y=0, linestyle="--", linewidth=1.0, alpha=0.6)
     plt.xlabel(x_label)
     plt.ylabel("Normalized probability error")
     plt.title(title)
@@ -572,12 +548,7 @@ def plot_normalized_error_over_time(error_history, title, x_label, include_pair_
     plt.tight_layout()
 
     if save_path is not None:
-        plt.savefig(
-            save_path,
-            dpi=300,
-            bbox_inches="tight"
-        )
-
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
     print("Mean normalized error:", np.mean(normalized_errors))

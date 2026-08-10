@@ -412,6 +412,7 @@ def _save_perturbed_result(result, region, total_perturbations, sd, save_dir):
         Na_Nb_transition_dict=np.array(plain_transition_dict(dicts["Na_Nb"]), dtype=object),
         Na_Nb_b_transition_dict=np.array(plain_transition_dict(dicts["Na_Nb_b"]), dtype=object),
         perturbed_route=np.array(result["route"], dtype=object),
+        stage2_error_history=np.array(result["stage2_error_history"], dtype=object),
         neuron_counts=result["neuron_counts"],
         region=region,
         total_perturbations=total_perturbations,
@@ -425,6 +426,80 @@ def run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_
         raise ValueError("total_perturbations must be greater than zero.")
     if model.hidden_size1 != model.hidden_size2:
         raise ValueError("'both' knockout currently requires equal A and B hidden sizes.")
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+
+        cache_paths = {
+            region: os.path.join(
+                save_dir,
+                f"connected_knockout_{region}_n{total_perturbations}_sd{sd}_bin{bin_size}.npz"
+            )
+            for region in ("a", "b", "both")
+        }
+
+        if all(os.path.exists(path) for path in cache_paths.values()):
+            results = {}
+            cache_valid = True
+
+            for region in ("a", "b", "both"):
+                loaded = np.load(cache_paths[region], allow_pickle=True)
+
+                if "stage2_error_history" not in loaded.files:
+                    cache_valid = False
+                    loaded.close()
+                    break
+
+                loaded_Na = loaded["Na_transition_dict"].item()
+                loaded_Nb = loaded["Nb_transition_dict"].item()
+                loaded_Na_b = loaded["Na_b_transition_dict"].item()
+                loaded_Nb_b = loaded["Nb_b_transition_dict"].item()
+                loaded_Na_Nb = loaded["Na_Nb_transition_dict"].item()
+                loaded_Na_Nb_b = loaded["Na_Nb_b_transition_dict"].item()
+
+                Na_dict = defaultdict(lambda: defaultdict(int))
+                Nb_dict = defaultdict(lambda: defaultdict(int))
+                Na_b_dict = defaultdict(lambda: defaultdict(int))
+                Nb_b_dict = defaultdict(lambda: defaultdict(int))
+                Na_Nb_dict = defaultdict(lambda: defaultdict(int))
+                Na_Nb_b_dict = defaultdict(lambda: defaultdict(int))
+
+                for state, freq_dict in loaded_Na.items():
+                    Na_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_Nb.items():
+                    Nb_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_Na_b.items():
+                    Na_b_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_Nb_b.items():
+                    Nb_b_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_Na_Nb.items():
+                    Na_Nb_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_Na_Nb_b.items():
+                    Na_Nb_b_dict[state] = defaultdict(int, freq_dict)
+
+                results[region] = {
+                    "dicts": {
+                        "Na": Na_dict,
+                        "Nb": Nb_dict,
+                        "Na_b": Na_b_dict,
+                        "Nb_b": Nb_b_dict,
+                        "Na_Nb": Na_Nb_dict,
+                        "Na_Nb_b": Na_Nb_b_dict
+                    },
+                    "route": loaded["perturbed_route"].tolist(),
+                    "neuron_counts": loaded["neuron_counts"].copy(),
+                    "stage2_error_history": loaded["stage2_error_history"].tolist()
+                }
+
+                loaded.close()
+
+            if cache_valid:
+                print(f"[Log] perturbation cache already exists for n={total_perturbations}")
+                return results
+            else:
+                print("[Log] old perturbation cache missing Stage 2 history. Regenerating...")
+
+    print("[Log] creating perturbation cache...")
 
     original_dicts = {
         "Na": Na_transition_dict,
@@ -544,7 +619,7 @@ if __name__ == "__main__":
                                                                 Nb_b_transition_dict,
                                                                 Na_Nb_transition_dict,
                                                                 Na_Nb_b_transition_dict,
-                                                                total_perturbations=1000,
+                                                                total_perturbations=4000,
                                                                 sd=42,
                                                                 save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache")
                                                             )
