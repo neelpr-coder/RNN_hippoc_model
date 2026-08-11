@@ -375,24 +375,7 @@ def load_grayscale_tensor(image_path, tensor_device):
     image_array = np.asarray(image, dtype=np.float32) / 255.0
     return torch.tensor(image_array, dtype=torch.float32, device=tensor_device)
 
-def build_perturbation_sequence(total_perturbations, tensor_device, sd=42):
-    np.random.seed(sd)
-    random.seed(sd)
-    b_state_img_path_dict, all_visit_count_dict = data.image_preproccesing()
-    all_b_states = list(all_visit_count_dict.keys())
-    current_b_state = all_b_states[np.random.randint(0, len(all_b_states))]
-    sequence = []
-
-    for step in range(total_perturbations + 1):
-        image_paths = b_state_img_path_dict[current_b_state]
-        image_path = image_paths[np.random.randint(0, len(image_paths))]
-        sequence.append((current_b_state, load_grayscale_tensor(image_path, tensor_device)))
-        if step < total_perturbations:
-            current_b_state = f2g.gaussian_sample_next_state(all_b_states, current_b_state)
-
-    return sequence
-
-def _build_balanced_neuron_schedule(hidden_size, total_perturbations, sd=42):
+def _build_balanced_neuron_order(hidden_size, total_perturbations, sd=42):
     repeats, remainder = divmod(total_perturbations, hidden_size)
     schedule = np.concatenate([np.tile(np.arange(hidden_size), repeats), np.arange(remainder)]).astype(int)
     rng = np.random.default_rng(sd)
@@ -411,6 +394,7 @@ def _save_perturbed_result(result, region, total_perturbations, sd, save_dir):
         Nb_b_transition_dict=np.array(plain_transition_dict(dicts["Nb_b"]), dtype=object),
         Na_Nb_transition_dict=np.array(plain_transition_dict(dicts["Na_Nb"]), dtype=object),
         Na_Nb_b_transition_dict=np.array(plain_transition_dict(dicts["Na_Nb_b"]), dtype=object),
+        b_transition_dict=np.array(plain_transition_dict(dicts["B"]), dtype=object),
         perturbed_route=np.array(result["route"], dtype=object),
         stage2_error_history=np.array(result["stage2_error_history"], dtype=object),
         neuron_counts=result["neuron_counts"],
@@ -456,6 +440,7 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                 loaded_Nb_b = loaded["Nb_b_transition_dict"].item()
                 loaded_Na_Nb = loaded["Na_Nb_transition_dict"].item()
                 loaded_Na_Nb_b = loaded["Na_Nb_b_transition_dict"].item()
+                loaded_b = loaded["b_transition_dict"].item()
 
                 Na_dict = defaultdict(lambda: defaultdict(int))
                 Nb_dict = defaultdict(lambda: defaultdict(int))
@@ -463,6 +448,7 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                 Nb_b_dict = defaultdict(lambda: defaultdict(int))
                 Na_Nb_dict = defaultdict(lambda: defaultdict(int))
                 Na_Nb_b_dict = defaultdict(lambda: defaultdict(int))
+                b_transition_dict = defaultdict(lambda: defaultdict(int))
 
                 for state, freq_dict in loaded_Na.items():
                     Na_dict[state] = defaultdict(int, freq_dict)
@@ -476,6 +462,8 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                     Na_Nb_dict[state] = defaultdict(int, freq_dict)
                 for state, freq_dict in loaded_Na_Nb_b.items():
                     Na_Nb_b_dict[state] = defaultdict(int, freq_dict)
+                for state, freq_dict in loaded_b.items():
+                    b_transition_dict[state] = defaultdict(int, freq_dict)
 
                 results[region] = {
                     "dicts": {
@@ -484,7 +472,8 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                         "Na_b": Na_b_dict,
                         "Nb_b": Nb_b_dict,
                         "Na_Nb": Na_Nb_dict,
-                        "Na_Nb_b": Na_Nb_b_dict
+                        "Na_Nb_b": Na_Nb_b_dict,
+                        "B": b_transition_dict
                     },
                     "route": loaded["perturbed_route"].tolist(),
                     "neuron_counts": loaded["neuron_counts"].copy(),
@@ -514,9 +503,16 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
     original_totals_before = {name: transition_count(dictionary) for name, dictionary in original_dicts.items()}
     model_device = next(model.parameters()).device
     model.eval()
+    np.random.seed(sd)
+    random.seed(sd)
 
-    sequence = build_perturbation_sequence(total_perturbations, model_device, sd=sd)
-    neuron_schedule = _build_balanced_neuron_schedule(model.hidden_size1, total_perturbations, sd=sd)
+    b_state_img_path_dict, all_visit_count_dict = data.image_preproccesing()
+    all_b_states = list(all_visit_count_dict.keys())
+    starting_b_state = all_b_states[np.random.randint(0, len(all_b_states))]
+
+    starting_image_path = b_state_img_path_dict[starting_b_state][0]
+    starting_image = load_grayscale_tensor(starting_image_path, model_device)
+    neuron_schedule = _build_balanced_neuron_order(model.hidden_size1, total_perturbations, sd=sd)
     neuron_counts = np.bincount(neuron_schedule, minlength=model.hidden_size1)
     results = {}
     b_state_img_path_dict, _ = data.image_preproccesing() # list of tuples (b_state, img_path) and dict of all behavioral_states and their associated visit count
@@ -533,13 +529,11 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
         h_b = torch.zeros(1, model.hidden_size2, device=model_device)
 
         with torch.no_grad():
-            current_b_state, current_image = sequence[0]
+            current_b_state, current_image = starting_b_state, starting_image
             current_Na, current_Nb, _, _, _, _ = model(current_image, current_image, h_a, h_b)
             h_a, h_b = current_Na, current_Nb
 
             for step, neuron_index in enumerate(neuron_schedule):
-                next_b_state, next_image = sequence[step + 1]
-
                 current_B_key = f2g.behavioral_state_to_key(current_b_state)
                 current_Na_key = f2g.neural_state_to_dict_key(current_Na.detach().cpu().numpy().reshape(-1), bin_size=bin_size)
                 current_Nb_key = f2g.neural_state_to_dict_key(current_Nb.detach().cpu().numpy().reshape(-1), bin_size=bin_size)
@@ -558,7 +552,7 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                     possible_next_B = list(next_B_transitions.keys())
                     probabilities_B = list(next_B_transitions.values())
 
-                    _, _, next_b = random.choices(possible_next_B, weights=probabilities_B, k=1)[0]
+                    next_b = random.choices(possible_next_B, weights=probabilities_B, k=1)[0]
 
 
                 next_b_state = next_b
@@ -583,6 +577,7 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                 updated_dicts["Nb_b"][(current_Nb_key, current_B_key)][(next_Nb_key, next_B_key)] += 1
                 updated_dicts["Na_Nb"][(current_Na_key, current_Nb_key)][(next_Na_key, next_Nb_key)] += 1
                 updated_dicts["Na_Nb_b"][(current_Na_key, current_Nb_key, current_B_key)][(next_Na_key, next_Nb_key, next_B_key)] += 1
+                updated_dicts["B"][current_B_key][next_B_key] += 1
 
                 stage2_error_history.append(pt.calc_stage2_error(frame=step + 1, B0=current_B_key, Na0=current_Na_key, Nb0=current_Nb_key, original_connected_dicts=original_dicts, updated_connected_dicts=updated_dicts))
                 perturbed_route.append((current_B_key, current_Na_key, current_Nb_key, next_B_key, next_Na_key, next_Nb_key, 1))

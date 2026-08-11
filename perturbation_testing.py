@@ -75,11 +75,12 @@ def calc_stage2_error(
         }
 
         row = {
-            "frame": frame,
-            "B0": B0,
-            "Na0": Na0,
-            "Nb0": Nb0
-        }
+                "frame": frame,
+                "B0": B0,
+                "Na0": Na0,
+                "Nb0": Nb0,
+                "frozen": len(original_connected_dicts["Na_Nb_b"].get((Na0, Nb0, B0), {})) == 0
+            }
 
         for name, current_key in current_keys.items():
             original_next = original_connected_dicts[name].get(current_key, {})
@@ -136,7 +137,7 @@ def calc_stage2_error(
     original_b_next = original_b_dict.get(B0, {})
     original_n_next = original_n_dict.get(N0, {})
     original_pair_next = original_pair_dict.get((B0, N0), {})
-
+    frozen = len(original_pair_next) == 0
     updated_b_next = updated_b_dict.get(B0, {})
     updated_n_next = updated_n_dict.get(N0, {})
     updated_pair_next = updated_pair_dict.get((B0, N0), {})
@@ -177,7 +178,8 @@ def calc_stage2_error(
         "original_pair_top": original_pair_top,
         "updated_b_top": updated_b_top,
         "updated_n_top": updated_n_top,
-        "updated_pair_top": updated_pair_top
+        "updated_pair_top": updated_pair_top,
+        "frozen": frozen
     }
 
 def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_pertubations, sd=42):
@@ -249,7 +251,8 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
                 cur_b_state_img_tensor = torch.tensor(cur_b_state_img_array, dtype=torch.float32, device=device)
                 h = None
                 cur_neural_state, h = model(cur_b_state_img_tensor, h)
-            
+                cur_neural_state_key = f2g.neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                cur_b_state_key = f2g.behavioral_state_to_key(cur_b_state)
                 cur_joint_key = (cur_b_state_key, cur_neural_state_key)
                 transitions_from_cur_joint_state = original_joint_prob.get(cur_joint_key, {})
                 frozen = len(transitions_from_cur_joint_state) == 0
@@ -259,11 +262,14 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
                     prob_distr = list(transitions_from_cur_joint_state.values())
                     next_b, _ = random.choices(next_transitions, weights=prob_distr, k=1)[0]
                 else: 
-                    ...
+                    possible_next_B_trans = original_B_prob.get(cur_b_state_key, {})
+                    possible_next_B = list(possible_next_B_trans.keys())
+                    probabilities_B = list(possible_next_B_trans.values())
+                    next_b = random.choices(possible_next_B, weights=probabilities_B, k=1)[0]
+
                 # find the next behavioral state and the neural state associated with it
-                next_b_state = f2g.gaussian_sample_next_state(all_b_states, cur_b_state)
-                next_b_state_img_paths = b_state_img_path_dict[next_b_state]
-                next_b_state_img_path = next_b_state_img_paths[np.random.randint(0, len(next_b_state_img_paths))]
+                next_b_state = next_b
+                next_b_state_img_path = b_state_img_path_dict[next_b_state][0]
                 next_b_state_img = Image.open(next_b_state_img_path).convert("L")
                 next_b_state_img = next_b_state_img.resize((25,25))
                 next_b_state_img_array = np.array(next_b_state_img) / 255.0
@@ -275,8 +281,7 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
                 finally:
                     handle.remove()
 
-                cur_neural_state_key = f2g.neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
-                cur_b_state_key = f2g.behavioral_state_to_key(cur_b_state)
+                
                 next_neural_state_key = f2g.neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
                 next_b_state_key = f2g.behavioral_state_to_key(next_b_state)
 
@@ -306,10 +311,24 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
             else:
                 cur_b_state = next_b_state
                 cur_neural_state = next_neural_state
-                
-                next_b_state = f2g.gaussian_sample_next_state(all_b_states, cur_b_state)
-                next_b_state_img_paths = b_state_img_path_dict[next_b_state]
-                next_b_state_img_path = next_b_state_img_paths[np.random.randint(0, len(next_b_state_img_paths))]
+                cur_b_state_key = f2g.behavioral_state_to_key(cur_b_state)
+                cur_neural_state_key = f2g.neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
+                cur_joint_key = (cur_b_state_key, cur_neural_state_key)
+                transitions_from_cur_joint_state = original_joint_prob.get(cur_joint_key, {})
+                frozen = len(transitions_from_cur_joint_state) == 0
+
+                if not frozen:
+                    next_transitions = list(transitions_from_cur_joint_state.keys())
+                    prob_distr = list(transitions_from_cur_joint_state.values())
+                    next_b, _ = random.choices(next_transitions, weights=prob_distr, k=1)[0]
+                else:
+                    possible_next_B_trans = original_B_prob.get(cur_b_state_key, {})
+                    possible_next_B = list(possible_next_B_trans.keys())
+                    probabilities_B = list(possible_next_B_trans.values())
+                    next_b = random.choices( possible_next_B, weights=probabilities_B, k=1)[0]
+
+                next_b_state = next_b
+                next_b_state_img_path = b_state_img_path_dict[next_b_state][0]
                 next_b_state_img = Image.open(next_b_state_img_path).convert("L")
                 next_b_state_img = next_b_state_img.resize((25,25))
                 next_b_state_img_array = np.array(next_b_state_img) / 255.0
@@ -544,9 +563,17 @@ def plot_normalized_error_over_time(error_history, title, x_label, include_pair_
     plt.figure(figsize=(11, 5.5))
     plt.plot(frames, normalized_errors, marker=marker, markersize=3, linewidth=1.6, label="Independent transition error")
 
+    frozen_frames = [row["frame"] for row in error_history if row.get("frozen", False)]
+    frozen_errors = [row["normalized_error"] for row in error_history if row.get("frozen", False)]
+
+    if frozen_frames:
+        plt.scatter(frozen_frames, frozen_errors, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10, label="Frozen state")
     if include_pair_error:
         normalized_pair_errors = [item["normalized_pair_error"] for item in error_history]
         plt.plot(frames, normalized_pair_errors, marker=marker, markersize=3, linewidth=1.6, label="Paired transition error")
+        if frozen_frames:
+            frozen_pair_errors = [row["normalized_pair_error"] for row in error_history if row.get("frozen", False)]
+            plt.scatter(frozen_frames, frozen_pair_errors, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10)
 
     plt.axhline(y=0, linestyle="--", linewidth=1.0, alpha=0.6)
     plt.xlabel(x_label)
@@ -587,13 +614,13 @@ if __name__ == "__main__":
     with np.load(ORIGINAL_PAIR_PATH, allow_pickle=True) as original_pair_file:
         og_pair_dict = (original_pair_file["pair_dict"].item())
 
-    new_b_t_dict, new_n_t_dict, new_pair_t_dict, stage_2_error_his = run_pertubation(model, total_num_pertubations=1000, sd=42)
+    new_b_t_dict, new_n_t_dict, new_pair_t_dict, stage_2_error_his = run_pertubation(model, og_b_dict, og_pair_dict, total_num_pertubations=1000, sd=42)
 
     # gen figures for visualization
-    #graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
-    #graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
-    #graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    #graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
+    graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
+    graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
     plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
     stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
     plot_normalized_error_over_time(stage_3_error_his, title="Stage 3 Perturbation Error Plot", x_label="Time Steps", include_pair_error=False, save_path="stage3_normalized_error_over_time.png")

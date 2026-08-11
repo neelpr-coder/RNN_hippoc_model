@@ -172,8 +172,19 @@ def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stag
 
     frames = [row["frame"] for row in error_history]
 
+    frozen_label_added = False
+
     for label in TRANSITION_LABELS:
-        ax.plot(frames, [row[label] for row in error_history], linewidth=1.5, label=label)
+        values = [row[label] for row in error_history]
+
+        ax.plot(frames, values, linewidth=1.5, label=label)
+        frozen_frames = [row["frame"] for row in error_history if row.get("frozen", False)]
+        frozen_values = [row[label] for row in error_history if row.get("frozen", False)]
+
+        if frozen_frames:
+            ax.scatter(frozen_frames, frozen_values, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10, label="Frozen state" if not frozen_label_added else None)
+
+            frozen_label_added = True
 
     ax.axhline(0.0, linestyle="--", linewidth=1)
     ax.set_xlabel("Perturbation step")
@@ -730,11 +741,12 @@ if __name__ == "__main__":
             "Na_b": Na_b_transition_dict,
             "Nb_b": Nb_b_transition_dict,
             "Na_Nb": Na_Nb_transition_dict,
-            "Na_Nb_b": Na_Nb_b_transition_dict
+            "Na_Nb_b": Na_Nb_b_transition_dict,
+            "B": b_transition_dict
         }
     pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
-    perturbation_results = cme.run_connected_knockout_experiments(model, Na_transition_dict, Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_transition_dict, Na_Nb_b_transition_dict, total_perturbations=4000, sd=42, save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache"))
+    perturbation_results = cme.run_connected_knockout_experiments(model, b_transition_dict, Na_transition_dict, Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_transition_dict, Na_Nb_b_transition_dict, total_perturbations=4000, sd=42, save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache"))
 
     stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
@@ -760,7 +772,7 @@ if __name__ == "__main__":
 
     plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")'''
     plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution Pre/Post Perturbation")
-
+    pearson_b_matrix = build_similarity_matrix(original_dicts["B"], )
 
     '''pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
