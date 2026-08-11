@@ -180,7 +180,7 @@ def calc_stage2_error(
         "updated_pair_top": updated_pair_top
     }
 
-def run_pertubation(model, total_num_pertubations, sd=42):
+def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_pertubations, sd=42):
     '''Run pertubation such that one node is randomly knockout hooked at each step
         A minimum of 1000 total pertubations must take place
         Each node must be pertubed between 50 to a 100 times such that the sum of each node's pertubation count is 1000
@@ -229,7 +229,8 @@ def run_pertubation(model, total_num_pertubations, sd=42):
     b_state_img_path_dict, all_visit_count_dict = data.image_preproccesing() # list of tuples (b_state, img_path) and dict of all behavioral_states and their associated visit count
     all_b_states = list(all_visit_count_dict.keys())
     starting_point = all_b_states[np.random.randint(0, len(all_b_states))] # randomly select a behavioral state as a starting point
-
+    original_joint_prob = f2g.convert_count_to_probability(joint_transition_dict)
+    original_B_prob = f2g.convert_count_to_probability(b_transition_dict)
     with torch.no_grad():
         while pertub_counter < max_pertubs:
             neurons_availble_for_pertub = [index for index, count in enumerate(neuron_visit_count_list) if count < 100]
@@ -249,7 +250,16 @@ def run_pertubation(model, total_num_pertubations, sd=42):
                 h = None
                 cur_neural_state, h = model(cur_b_state_img_tensor, h)
             
-        
+                cur_joint_key = (cur_b_state_key, cur_neural_state_key)
+                transitions_from_cur_joint_state = original_joint_prob.get(cur_joint_key, {})
+                frozen = len(transitions_from_cur_joint_state) == 0
+
+                if not frozen:
+                    next_transitions = list(transitions_from_cur_joint_state.keys())
+                    prob_distr = list(transitions_from_cur_joint_state.values())
+                    next_b, _ = random.choices(next_transitions, weights=prob_distr, k=1)[0]
+                else: 
+                    ...
                 # find the next behavioral state and the neural state associated with it
                 next_b_state = f2g.gaussian_sample_next_state(all_b_states, cur_b_state)
                 next_b_state_img_paths = b_state_img_path_dict[next_b_state]
