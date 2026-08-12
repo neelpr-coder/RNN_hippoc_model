@@ -73,14 +73,23 @@ def calc_stage2_error(
             "Na_Nb": (Na0, Nb0),
             "Na_Nb_b": (Na0, Nb0, B0)
         }
+        neural_frozen = len(original_connected_dicts["Na_Nb"].get( (Na0, Nb0), {})) == 0
+        pair_frozen = len(original_connected_dicts["Na_Nb_b"].get( (Na0, Nb0, B0), {})) == 0
 
+        both_frozen = neural_frozen and pair_frozen
+        pair_only_frozen = pair_frozen and not neural_frozen
+        neural_only_frozen = neural_frozen and not pair_frozen
         row = {
-                "frame": frame,
-                "B0": B0,
-                "Na0": Na0,
-                "Nb0": Nb0,
-                "frozen": len(original_connected_dicts["Na_Nb_b"].get((Na0, Nb0, B0), {})) == 0
-            }
+            "frame": frame,
+            "B0": B0,
+            "Na0": Na0,
+            "Nb0": Nb0,
+            "neural_frozen": neural_frozen,
+            "pair_frozen": pair_frozen,
+            "both_frozen": both_frozen,
+            "pair_only_frozen": pair_only_frozen,
+            "neural_only_frozen": neural_only_frozen
+        }
 
         for name, current_key in current_keys.items():
             original_next = original_connected_dicts[name].get(current_key, {})
@@ -137,7 +146,13 @@ def calc_stage2_error(
     original_b_next = original_b_dict.get(B0, {})
     original_n_next = original_n_dict.get(N0, {})
     original_pair_next = original_pair_dict.get((B0, N0), {})
-    frozen = len(original_pair_next) == 0
+
+    neural_frozen = len(original_n_next) == 0
+    pair_frozen = len(original_pair_next) == 0
+    both_frozen = neural_frozen and pair_frozen
+    pair_only_frozen = pair_frozen and not neural_frozen
+    neural_only_frozen = neural_frozen and not pair_frozen
+
     updated_b_next = updated_b_dict.get(B0, {})
     updated_n_next = updated_n_dict.get(N0, {})
     updated_pair_next = updated_pair_dict.get((B0, N0), {})
@@ -179,7 +194,11 @@ def calc_stage2_error(
         "updated_b_top": updated_b_top,
         "updated_n_top": updated_n_top,
         "updated_pair_top": updated_pair_top,
-        "frozen": frozen
+        "neural_frozen": neural_frozen,
+        "pair_frozen": pair_frozen,
+        "both_frozen": both_frozen,
+        "pair_only_frozen": pair_only_frozen,
+        "neural_only_frozen": neural_only_frozen
     }
 
 def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_pertubations, sd=42):
@@ -315,9 +334,10 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
                 cur_neural_state_key = f2g.neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
                 cur_joint_key = (cur_b_state_key, cur_neural_state_key)
                 transitions_from_cur_joint_state = original_joint_prob.get(cur_joint_key, {})
-                frozen = len(transitions_from_cur_joint_state) == 0
+                neural_frozen = len(original_n_transition_dict.get(cur_neural_state_key, {})) == 0
+                pair_frozen = len(transitions_from_cur_joint_state) == 0
 
-                if not frozen:
+                if not pair_frozen:
                     next_transitions = list(transitions_from_cur_joint_state.keys())
                     prob_distr = list(transitions_from_cur_joint_state.values())
                     next_b, _ = random.choices(next_transitions, weights=prob_distr, k=1)[0]
@@ -339,9 +359,7 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
                     next_neural_state, h = model(next_b_state_img_tensor, h)
                 finally:
                     handle.remove()
-                                    
-                cur_neural_state_key =  f2g.neural_state_to_dict_key(cur_neural_state.detach().cpu().numpy(), bin_size=0.3)
-                cur_b_state_key = f2g.behavioral_state_to_key(cur_b_state)
+                                   
                 next_neural_state_key = f2g.neural_state_to_dict_key(next_neural_state.detach().cpu().numpy(), bin_size=0.3)
                 next_b_state_key = f2g.behavioral_state_to_key(next_b_state)
 
@@ -519,8 +537,14 @@ def calc_stage3_error(route_sequence, original_b_dict, original_n_dict, original
         # Same normalization structure as figure2_generation.py.
         C = (len(original_b_next) + len(original_n_next) + len(original_pair_next))
 
-        normalized_error = (raw_error / C if C > 0 else 0.0)
-        normalized_pair_error = (pair_raw_error / C if C > 0 else 0.0)
+        if C == 0:
+            normalized_independent_error = 0.0
+            normalized_pair_error = 0.0
+            zeroed_out = True
+        else:
+            normalized_independent_error = raw_error / C
+            normalized_pair_error = pair_raw_error / C
+            zeroed_out = False
 
         error_history.append({
             "frame": frame_idx,
@@ -530,50 +554,90 @@ def calc_stage3_error(route_sequence, original_b_dict, original_n_dict, original
             "B1": B1,
             "N1": N1,
 
-            "original_probability":
-                original_independent_probability,
-
-            "updated_probability":
-                updated_independent_probability,
-
+            "original_probability": original_independent_probability,
+            "updated_probability": updated_independent_probability,
             "raw_error": raw_error,
-            "normalized_error": normalized_error,
-
-            "original_pair_probability":
-                original_pair_prob,
-
-            "updated_pair_probability":
-                updated_pair_prob,
-
+            "normalized_independent_error": normalized_independent_error,
+            "normalized_pair_error": normalized_pair_error,
+            "original_pair_probability": original_pair_prob,
+            "updated_pair_probability": updated_pair_prob,
             "pair_raw_error": pair_raw_error,
-            "normalized_pair_error":
-                normalized_pair_error,
-
-            "C": C
+            "C": C,
+            "zeroed_out": zeroed_out
         })
 
     return error_history
 
+def plot_stage3_error(error_history, title="Stage 3 Perturbation Error Plot", save_path=None):
+    frames = [row["frame"] for row in error_history]
+    values = [row["normalized_independent_error"] for row in error_history]
+    zeroed_idx = [i for i, row in enumerate(error_history) if row["zeroed_out"]]
+    true_zero_idx = [i for i, row in enumerate(error_history) if (row["normalized_independent_error"] == 0.0 and not row["zeroed_out"])]
+
+    plt.figure(figsize=(12, 7))
+    plt.plot(frames, values, marker="o", linewidth=1.8, label="Independent transition error")
+    plt.axhline(0.0, linestyle="--", linewidth=1)
+
+    if zeroed_idx:
+        plt.scatter(
+            [frames[i] for i in zeroed_idx],
+            [values[i] for i in zeroed_idx],
+            marker="X",
+            s=100,
+            c="red",
+            edgecolors="black",
+            zorder=5,
+            label="Zeroed out (C = 0)"
+        )
+
+    if true_zero_idx:
+        plt.scatter(
+            [frames[i] for i in true_zero_idx],
+            [values[i] for i in true_zero_idx],
+            marker="s",
+            s=55,
+            facecolors="none",
+            edgecolors="green",
+            zorder=4,
+            label="True zero error"
+        )
+
+    plt.xlabel("Time Steps")
+    plt.ylabel("Normalized probability error")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
 def plot_normalized_error_over_time(error_history, title, x_label, include_pair_error=False, save_path=None, show_points=True):
     frames = [item["frame"] for item in error_history]
-    normalized_errors = [item["normalized_error"] for item in error_history]
+    normalized_errors = [item["normalized_independent_error"] for item in error_history]
 
     marker = "o" if show_points else None
 
     plt.figure(figsize=(11, 5.5))
     plt.plot(frames, normalized_errors, marker=marker, markersize=3, linewidth=1.6, label="Independent transition error")
-
-    frozen_frames = [row["frame"] for row in error_history if row.get("frozen", False)]
-    frozen_errors = [row["normalized_error"] for row in error_history if row.get("frozen", False)]
-
-    if frozen_frames:
-        plt.scatter(frozen_frames, frozen_errors, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10, label="Frozen state")
+  
     if include_pair_error:
         normalized_pair_errors = [item["normalized_pair_error"] for item in error_history]
         plt.plot(frames, normalized_pair_errors, marker=marker, markersize=3, linewidth=1.6, label="Paired transition error")
-        if frozen_frames:
-            frozen_pair_errors = [row["normalized_pair_error"] for row in error_history if row.get("frozen", False)]
-            plt.scatter(frozen_frames, frozen_pair_errors, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10)
+        
+        frozen_styles = [
+            ("both_frozen", "X", "red", "Pair + neural frozen"),
+            ("pair_only_frozen", "D", "gold", "Pair frozen only"),
+            ("neural_only_frozen", "^", "purple", "Neural frozen only")
+        ]
+
+        for flag, marker_shape, color, label in frozen_styles:
+            frozen_frames = [row["frame"] for row in error_history if row.get(flag, False)]
+            frozen_errors = [row["normalized_pair_error"] for row in error_history if row.get(flag, False)]
+
+            if frozen_frames:
+                plt.scatter(frozen_frames, frozen_errors, marker=marker_shape, s=90, color=color, edgecolors="black", linewidths=0.7, zorder=10, label=label)
 
     plt.axhline(y=0, linestyle="--", linewidth=1.0, alpha=0.6)
     plt.xlabel(x_label)
@@ -617,10 +681,10 @@ if __name__ == "__main__":
     new_b_t_dict, new_n_t_dict, new_pair_t_dict, stage_2_error_his = run_pertubation(model, og_b_dict, og_pair_dict, total_num_pertubations=1000, sd=42)
 
     # gen figures for visualization
-    graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
-    graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
-    graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    #graph_neural_distribution(new_n_t_dict, title="Updated Neural-State Outgoing Transition Distribution")
+    #graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
+    #graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
+    #graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
     plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
     stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
-    plot_normalized_error_over_time(stage_3_error_his, title="Stage 3 Perturbation Error Plot", x_label="Time Steps", include_pair_error=False, save_path="stage3_normalized_error_over_time.png")
+    plot_stage3_error(stage_3_error_his, title="Stage 3 Perturbation Error Plot", save_path="stage3_normalized_error_over_time.png")

@@ -134,7 +134,14 @@ def plot_connected_stage3_error(error_history, title="Connected RNN Stage 3 Erro
 
     frames = [row["frame"] for row in error_history]
     for label in TRANSITION_LABELS:
-        ax.plot(frames, [row[label] for row in error_history], marker="o", markersize=3, linewidth=1.5, label=label)
+        values = [row[label] for row in error_history]
+        ax.plot(frames, values, marker="o", markersize=3, linewidth=1.5, label=label)
+
+        false_zero_frames = [row["frame"] for row in error_history if row.get(f"{label}_false_zero", False)]
+        false_zero_values = [row[label] for row in error_history if row.get(f"{label}_false_zero", False)]
+
+        if false_zero_frames:
+            ax.scatter(false_zero_frames, false_zero_values, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10, label=f"{label} C = 0")
 
     ax.axhline(0.0, linestyle="--", linewidth=1)
     ax.set_xlabel("Time step along original route")
@@ -172,19 +179,22 @@ def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stag
 
     frames = [row["frame"] for row in error_history]
 
-    frozen_label_added = False
-
     for label in TRANSITION_LABELS:
         values = [row[label] for row in error_history]
-
         ax.plot(frames, values, linewidth=1.5, label=label)
-        frozen_frames = [row["frame"] for row in error_history if row.get("frozen", False)]
-        frozen_values = [row[label] for row in error_history if row.get("frozen", False)]
+
+    frozen_styles = [
+            ("both_frozen", "X", "red", "Pair + neural frozen"),
+            ("pair_only_frozen", "D", "orange", "Pair frozen only"),
+            ("neural_only_frozen", "^", "purple", "Neural frozen only")
+        ]
+
+    for flag, marker_shape, color, marker_label in frozen_styles:
+        frozen_frames = [row["frame"] for row in error_history if row.get(flag, False)]
+        frozen_errors = [row["Na_Nb_b"] for row in error_history if row.get(flag, False)]
 
         if frozen_frames:
-            ax.scatter(frozen_frames, frozen_values, marker="X", s=90, color="red", edgecolors="black", linewidths=0.7, zorder=10, label="Frozen state" if not frozen_label_added else None)
-
-            frozen_label_added = True
+            ax.scatter(frozen_frames, frozen_errors, marker=marker_shape, s=90, color=color, edgecolors="black", linewidths=0.7, zorder=10, label=marker_label)
 
     ax.axhline(0.0, linestyle="--", linewidth=1)
     ax.set_xlabel("Perturbation step")
@@ -767,12 +777,20 @@ if __name__ == "__main__":
     for region in ("a", "b", "both"):
         plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)
 
-    '''for region in ("a", "b", "both"):
+    for region in ("a", "b", "both"):
         plot_connected_error_change(error_change_histories[region], title=f"{region.upper()} Knockout: Change in Fixed-Route Error", save_path=None)
 
-    plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")'''
-    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution Pre/Post Perturbation")
-    pearson_b_matrix = build_similarity_matrix(original_dicts["B"], )
+    plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")
+    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution of Region A Pre/Post Perturbation")
+    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["b"]["route"], title="Behavioral State Distribution of Region B Pre/Post Perturbation")
+    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["both"]["route"], title="Behavioral State Distribution of Both Regions Pre/Post Perturbation")
+   
+    region_a_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["a"]["dicts"]["B"])
+    region_b_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["b"]["dicts"]["B"])
+    both_regions_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["both"]["dicts"]["B"])
+    plot_pearson_matrix(region_a_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Perturbed Region A Behavioral States and Original Behavioral States")
+    plot_pearson_matrix(region_b_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Perturbed Region B Behavioral States and Original Behavioral States")
+    plot_pearson_matrix(both_regions_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Both Perturbed Regions Behavioral States and Original Behavioral States")
 
     '''pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
