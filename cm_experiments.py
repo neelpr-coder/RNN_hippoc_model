@@ -521,6 +521,7 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
     original_B_prob = f2g.convert_count_to_probability(original_dicts["B"])
 
     for region in ("a", "b", "both"):
+        region_rng = random.Random(sd)
         updated_dicts = {name: copy_transition_dict(dictionary) for name, dictionary in original_dicts.items()}
         perturbed_route = []
         stage2_error_history = []
@@ -545,14 +546,21 @@ def run_connected_knockout_experiments(model, b_transition_dict, Na_transition_d
                     all_next_states = list(transitions_from_cur.keys())
                     next_state_prob = list(transitions_from_cur.values())
 
-                    _, _, next_b = random.Random(sd).choices(all_next_states, weights=next_state_prob, k=1)[0]
+                    _, _, next_b = region_rng.choices(all_next_states, weights=next_state_prob, k=1)[0]
                    
                 else:
                     next_B_transitions = original_B_prob.get(current_B_key, {})
                     possible_next_B = list(next_B_transitions.keys())
                     probabilities_B = list(next_B_transitions.values())
 
-                    next_b = random.Random(sd).choices(possible_next_B, weights=probabilities_B, k=1)[0]
+                    next_b = region_rng.choices(possible_next_B, weights=probabilities_B, k=1)[0]
+                    if region == "a" and current_B_key == (4, 0, 2) and step < 500:
+                        print(
+                            f"step={step}",
+                            "FROZEN",
+                            "current_B=", current_B_key,
+                            "next_B=", next_b
+                        )
 
 
                 next_b_state = next_b

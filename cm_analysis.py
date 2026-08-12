@@ -7,9 +7,9 @@ from collections import defaultdict, Counter
 import perturbation_testing as pt
 import cm_experiments as cme
 import connected_models as cm
-
 import figure2_generation as f2g
 import manifold_visualization as mv
+from scipy.ndimage import gaussian_filter1d
 
 if torch.backends.mps.is_available():
     device = torch.device("mps")
@@ -172,32 +172,77 @@ def plot_all_stage3_conditions(stage3_histories, save_path=None):
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
-def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stage 2 Error", save_path=None, ax=None):
-    created_figure = ax is None
-    if created_figure:
-        fig, ax = plt.subplots(figsize=(12, 7))
+def gaussian_smooth_ignore_invalid(values, invalid_mask, sigma=25):
+    values = np.asarray(values, dtype=float)
+    invalid_mask = np.asarray(invalid_mask, dtype=bool)
 
-    frames = [row["frame"] for row in error_history]
+    valid = (~invalid_mask).astype(float)
+    weighted_values = np.where(invalid_mask, 0.0, values)
+
+    numerator = gaussian_filter1d(weighted_values, sigma=sigma, mode="nearest")
+    denominator = gaussian_filter1d(valid, sigma=sigma, mode="nearest")
+    smoothed = np.full_like(values, np.nan)
+    good = denominator > 1e-8
+
+    smoothed[good] = numerator[good] / denominator[good]
+
+    return smoothed
+
+def plot_frozen_fraction(ax, error_history, bin_size=50):
+    n = len(error_history)
+    bin_starts = np.arange(0, n, bin_size)
+
+    centers = []
+    both_fraction = []
+    pair_only_fraction = []
+    neural_only_fraction = []
+
+    for start in bin_starts:
+        end = min(start + bin_size, n)
+        chunk = error_history[start:end]
+        centers.append(np.mean([row["frame"] for row in chunk]))
+        both_fraction.append(np.mean([row.get("both_frozen", False) for row in chunk]))
+        pair_only_fraction.append(np.mean([ row.get("pair_only_frozen", False) for row in chunk]))
+        neural_only_fraction.append(np.mean([ row.get("neural_only_frozen", False) for row in chunk ]))
+
+    ax.plot(centers, both_fraction, linewidth=1.6, label="Pair + neural frozen")
+    ax.plot(centers, pair_only_fraction, linewidth=1.6, label="Pair frozen only")
+
+    if np.any(np.asarray(neural_only_fraction) > 0):
+        ax.plot(centers,neural_only_fraction,linewidth=1.6,label="Neural frozen only")
+
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Frozen\nfraction")
+    ax.grid(alpha=0.2)
+    ax.legend( bbox_to_anchor=(1.02, 1),loc="upper left")
+
+def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stage 2 Error", save_path=None, ax=None, smooth_sigma=25, show_raw=True):
+    created_figure = ax is None
+
+    if created_figure:
+        fig, ax = plt.subplots(figsize=(18, 7))
+
+    frames = np.asarray([row["frame"] for row in error_history])
 
     for label in TRANSITION_LABELS:
-        values = [row[label] for row in error_history]
-        ax.plot(frames, values, linewidth=1.5, label=label)
+        values = np.asarray([row[label] for row in error_history], dtype=float)
+        false_zero_mask = np.asarray([row.get(f"{label}_false_zero", False) for row in error_history ], dtype=bool)
 
-    frozen_styles = [
-            ("both_frozen", "X", "red", "Pair + neural frozen"),
-            ("pair_only_frozen", "D", "orange", "Pair frozen only"),
-            ("neural_only_frozen", "^", "purple", "Neural frozen only")
-        ]
+        smoothed_values = gaussian_smooth_ignore_invalid(values, false_zero_mask, sigma=smooth_sigma)
+        smooth_line, = ax.plot( frames, smoothed_values, linewidth=2.2, label=label, zorder=4)
 
-    for flag, marker_shape, color, marker_label in frozen_styles:
-        frozen_frames = [row["frame"] for row in error_history if row.get(flag, False)]
-        frozen_errors = [row["Na_Nb_b"] for row in error_history if row.get(flag, False)]
+        if show_raw:
+            display_values = values.copy()
 
-        if frozen_frames:
-            ax.scatter(frozen_frames, frozen_errors, marker=marker_shape, s=90, color=color, edgecolors="black", linewidths=0.7, zorder=10, label=marker_label)
+            # Don't connect C=0
+            display_values[false_zero_mask] = np.nan
+            ax.plot(frames, display_values,linewidth=0.4, alpha=0.45, color=smooth_line.get_color(), zorder=1)
 
-    ax.axhline(0.0, linestyle="--", linewidth=1)
-    ax.set_xlabel("Perturbation step")
+    ax.axhline(0.0, linestyle="--", linewidth=0.8, alpha=0.5, zorder=2)
+
+    if created_figure:
+        ax.set_xlabel("Perturbation step")
+
     ax.set_ylabel("Stage 2 error\n(original top-1 − updated top-1)")
     ax.set_title(title)
     ax.grid(alpha=0.25)
@@ -207,22 +252,41 @@ def plot_connected_stage2_error_overlay(error_history, title="Connected RNN Stag
         plt.tight_layout()
         if save_path is not None:
             plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
         plt.show()
 
 def plot_all_stage2_conditions(stage2_histories, save_path=None):
-    titles = {"a": "Region A Knockout", "b": "Region B Knockout", "both": "Regions A and B Knockout"}
-    fig, axes = plt.subplots(3, 1, figsize=(13, 16), sharex=True)
+    fig, axes = plt.subplots(6, 1, figsize=(18, 14), sharex=True, gridspec_kw={"height_ratios": [4, 1, 4, 1, 4, 1]})
 
-    for ax, region in zip(axes, ("a", "b", "both")):
-        plot_connected_stage2_error_overlay(stage2_histories[region], title=titles[region], ax=ax)
+    regions = [
+        ("a", "Region A Knockout"),
+        ("b", "Region B Knockout"),
+        ("both", "Regions A and B Knockout")
+    ]
 
-    axes[0].set_xlabel("")
-    axes[1].set_xlabel("")
-    fig.suptitle("Connected RNN Stage 2 Error", fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    for i, (region, title) in enumerate(regions):
+        error_ax = axes[i * 2]
+        frozen_ax = axes[i * 2 + 1]
+
+        plot_connected_stage2_error_overlay( stage2_histories[region], title=title, ax=error_ax, smooth_sigma=25, show_raw=True)
+        plot_frozen_fraction(frozen_ax, stage2_histories[region], bin_size=50)
+
+    for ax in axes[:-1]:
+        ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+
+    max_step = max(row["frame"] for history in stage2_histories.values() for row in history)
+    tick_end = int(np.ceil(max_step / 500.0) * 500)
+
+    axes[-1].set_xticks(np.arange(0, tick_end + 1, 500))
+    axes[-1].set_xlim( 0, max_step)
+    axes[-1].set_xlabel( "Perturbation step")
+
+    #fig.suptitle("Connected RNN Stage 2 Error", fontsize=16)
+
+    plt.subplots_adjust( hspace=0.18, right=0.80, top=0.95)
 
     if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig( save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -582,30 +646,34 @@ def get_b_distribution_from_route(route):
 
     return counts
 
-def plot_b_distribution_pre_post(b_transition_dict, perturbed_route, title="Behavioral State Distribution Pre/Post Perturbation"):
+def plot_b_distribution_pre_post(b_transition_dict, perturbed_route, title="Behavioral State Distribution Pre/Post Perturbation", max_xtick_labels=30):
     pre_counts = get_b_distribution_from_dict(b_transition_dict)
     post_counts = get_b_distribution_from_route(perturbed_route)
 
-    states = sorted(set(pre_counts) | set(post_counts), key=str)
-
+    states = sorted(set(pre_counts) | set(post_counts), key=lambda state: (state[0], state[1], state[2]))
     pre_values = np.array([pre_counts[state] for state in states], dtype=float)
     post_values = np.array([post_counts[state] for state in states], dtype=float)
-
     pre_values /= pre_values.sum()
     post_values /= post_values.sum()
 
     x = np.arange(len(states))
     width = 0.42
 
-    plt.figure(figsize=(18, 7))
+    plt.figure(figsize=(20, 7))
     plt.bar(x - width / 2, pre_values, width, label="Pre-perturbation")
     plt.bar(x + width / 2, post_values, width, label="Perturbation sequence")
 
-    plt.xlabel("Behavioral state")
+    state_labels = [f"({state[0]}, {state[1]}, {state[2] * 90}°)" for state in states]
+
+    tick_step = max(1, int(np.ceil(len(states) / max_xtick_labels)))
+    tick_indices = np.arange(0, len(states), tick_step)
+
+    plt.xticks(tick_indices, [state_labels[i] for i in tick_indices], rotation=60, ha="right", fontsize=8)
+    plt.xlabel("Behavioral state (x, y, heading)")
     plt.ylabel("State probability")
     plt.title(title)
-    plt.xticks(x, [str(state) for state in states], rotation=90, fontsize=6)
     plt.legend()
+    plt.grid(axis="y", alpha=0.25)
     plt.tight_layout()
     plt.show()
 
@@ -721,6 +789,7 @@ def plot_pre_post_error_distribution(pre_history, post_history, error_bin_width=
     plt.bar(x + width / 2, post_counts, width, label="Post-perturbation")
     plt.xlabel("Error range")
     plt.ylabel("Number of errors")
+    plt.yscale("log")
     plt.title(title)
     plt.xticks(x, labels, rotation=45, ha="right")
     plt.legend()
@@ -757,41 +826,42 @@ if __name__ == "__main__":
     pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
     perturbation_results = cme.run_connected_knockout_experiments(model, b_transition_dict, Na_transition_dict, Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_transition_dict, Na_Nb_b_transition_dict, total_perturbations=4000, sd=42, save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache"))
+    route = perturbation_results["a"]["route"]
 
-    stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
+    '''stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
         plot_connected_stage2_error_overlay(stage2_histories[region], title=f"Stage 2 Error During {region.upper()} Knockout", save_path=None)
     plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions_4000.png")
 
     for region in ("a", "b", "both"):
         plot_signed_errors_histogram(stage2_histories[region], bin_size=200, title=f"{region.upper()} Knockout: Positive/Negative Errors per 200 Perturbations", save_path=None)
+'''
+    #post_error_histories = {}
+    #error_change_histories = {}
 
-    post_error_histories = {}
-    error_change_histories = {}
-
-    for region in ("a", "b", "both"):
+    '''for region in ("a", "b", "both"):
         updated_dicts = perturbation_results[region]["dicts"]
         post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
-        error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
+        #error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
 
     for region in ("a", "b", "both"):
-        plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)
+        plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)'''
 
-    for region in ("a", "b", "both"):
-        plot_connected_error_change(error_change_histories[region], title=f"{region.upper()} Knockout: Change in Fixed-Route Error", save_path=None)
+    '''for region in ("a", "b", "both"):
+        plot_connected_error_change(error_change_histories[region], title=f"{region.upper()} Knockout: Change in Fixed-Route Error", save_path=None)'''
 
-    plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")
-    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution of Region A Pre/Post Perturbation")
-    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["b"]["route"], title="Behavioral State Distribution of Region B Pre/Post Perturbation")
-    plot_b_distribution_pre_post(b_transition_dict, perturbation_results["both"]["route"], title="Behavioral State Distribution of Both Regions Pre/Post Perturbation")
-   
-    region_a_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["a"]["dicts"]["B"])
-    region_b_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["b"]["dicts"]["B"])
-    both_regions_pearson_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["both"]["dicts"]["B"])
-    plot_pearson_matrix(region_a_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Perturbed Region A Behavioral States and Original Behavioral States")
-    plot_pearson_matrix(region_b_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Perturbed Region B Behavioral States and Original Behavioral States")
-    plot_pearson_matrix(both_regions_pearson_behavioral_matrix, x_labels, y_labels, title="Pearson Similarity Correlations Between Both Perturbed Regions Behavioral States and Original Behavioral States")
-
+    #plot_all_error_change_conditions(error_change_histories, save_path="connected_route_error_change_all_conditions_4000.png")
+    #plot_b_distribution_pre_post(b_transition_dict, perturbation_results["a"]["route"], title="Behavioral State Distribution of Region A Pre/Post Perturbation")
+    #plot_b_distribution_pre_post(b_transition_dict, perturbation_results["b"]["route"], title="Behavioral State Distribution of Region B Pre/Post Perturbation")
+    #plot_b_distribution_pre_post(b_transition_dict, perturbation_results["both"]["route"], title="Behavioral State Distribution of Both Regions Pre/Post Perturbation")
+    '''
+    region_a_euclidean_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["a"]["dicts"]["B"], metric="euclidean")
+    region_b_euclidean_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["b"]["dicts"]["B"], metric="euclidean")
+    both_regions_euclidean_behavioral_matrix, x_labels, y_labels, _, _ = build_similarity_matrix(original_dicts["B"], perturbation_results["both"]["dicts"]["B"], metric="euclidean")
+    plot_euclidean_matrix(region_a_euclidean_behavioral_matrix, x_labels, y_labels, title="Euclidean Distance Between Region A Perturbed Behavioral States and Original Behavioral States")
+    plot_euclidean_matrix(region_b_euclidean_behavioral_matrix, x_labels, y_labels, title="Euclidean Distance Between Region B Perturbed Behavioral States and Original Behavioral States")
+    plot_euclidean_matrix(both_regions_euclidean_behavioral_matrix, x_labels, y_labels, title="Euclidean Distance Between Both Regions Perturbed Behavioral States and Original Behavioral States")
+    '''
     '''pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
     post_error_histories = {}
@@ -801,7 +871,7 @@ if __name__ == "__main__":
         updated_dicts = perturbation_results[region]["dicts"]
         post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
         error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
-    plot_all_error_change_conditions(error_change_histories, save_path="change_in_error_post_pre_perturb_connected_model.png")
+    plot_all_error_change_conditions(error_change_histories, save_path="change_in_error_post_pre_perturb_connected_model.png")'''
     
     stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
@@ -810,7 +880,7 @@ if __name__ == "__main__":
             title=f"Stage 2 Error During {region.upper()} Knockout",
             save_path=None
         )
-    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")'''
+    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")
     
     '''
     stage3_histories = {}

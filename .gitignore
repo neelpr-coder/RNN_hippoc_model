@@ -14,6 +14,8 @@ neural_keys_min100_sd42.npy
 top3_route_transitions_min100.npy
 Copy_Transition_Cache
 stage2_normalized_error_over_time.png
+pre_perturb_stage3_normalized_error_over_time.png
+post_perturb_stage3_normalized_error_over_time.png
 stage3_normalized_error_over_time.png
 post_stage1_model_sd42.pt
 error_history_min100.npy
@@ -22,4 +24,6 @@ post_stage1_connected_model_sd42.pt
 Perturbation_Connected_Cache
 connected_stage2_error_all_conditions.png
 connected_stage3_error_all_conditions.png
+connected_route_error_change_all_conditions_4000.png
+connected_stage2_error_all_conditions_4000.png
 change_in_error_post_pre_perturb_connected_model.png

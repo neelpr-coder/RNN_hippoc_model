@@ -182,7 +182,7 @@ def calc_stage2_error(
         "original_best_probability": original_best_probability,
         "updated_best_probability": updated_best_probability,
         "raw_error": raw_error,
-        "normalized_error": normalized_error,
+        "normalized_independent_error": normalized_error,
         "original_pair_top_probability": original_pair_top_prob,
         "updated_pair_top_probability": updated_pair_top_prob,
         "pair_raw_error": pair_raw_error,
@@ -502,49 +502,55 @@ def graph_behavioral_distribution(behavioral_dict, title, collapse_headings=True
 
     return dict(plotted_counts)
 
-def calc_stage3_error(route_sequence, original_b_dict, original_n_dict, original_pair_dict, updated_b_dict, updated_n_dict, updated_pair_dict):
+def calc_stage3_error(route_sequence, updated_b_dict, updated_n_dict, updated_pair_dict):
     """
     Compare original and updated transition probabilities along the
-    same fixed 50-step route.
+    same fixed 50-step route: route_sequence_min100.npy
     """
     error_history = []
 
-    for frame_idx, route_step in enumerate(route_sequence,start=1):
+    for frame_idx, route_step in enumerate(route_sequence, start=1):
         B0, N0, B1, N1, observed_count = route_step
 
-        original_b_next = original_b_dict.get(B0, {})
-        original_n_next = original_n_dict.get(N0, {})
-        original_pair_next = original_pair_dict.get((B0, N0), {})
+        b_next = updated_b_dict.get(B0, {})
+        n_next = updated_n_dict.get(N0, {})
+        pair_next = updated_pair_dict.get((B0, N0), {})
 
-        updated_b_next = updated_b_dict.get(B0, {})
-        updated_n_next = updated_n_dict.get(N0, {})
-        updated_pair_next = updated_pair_dict.get((B0, N0), {})
+        b_C = len(b_next)
+        n_C = len(n_next)
+        pair_C = len(pair_next)
+        C = b_C + n_C + pair_C
 
-        original_b_prob, _, _ = (f2g.transition_prob_from_counts(original_b_next, B1))
-        original_n_prob, _, _ = (f2g.transition_prob_from_counts(original_n_next, N1))
-        original_pair_prob, _, _ = (f2g.transition_prob_from_counts(original_pair_next, (B1, N1)))
-        updated_b_prob, _, _ = (f2g.transition_prob_from_counts(updated_b_next, B1))
-        updated_n_prob, _, _ = (f2g.transition_prob_from_counts(updated_n_next, N1))
-        updated_pair_prob, _, _ = (f2g.transition_prob_from_counts(updated_pair_next, (B1, N1)))
-
-        original_independent_probability = (original_b_prob * original_n_prob)
-        updated_independent_probability = (updated_b_prob * updated_n_prob)
-
-        raw_error = (original_independent_probability - updated_independent_probability)
-
-        pair_raw_error = (original_pair_prob - updated_pair_prob)
-
-        # Same normalization structure as figure2_generation.py.
-        C = (len(original_b_next) + len(original_n_next) + len(original_pair_next))
-
-        if C == 0:
-            normalized_independent_error = 0.0
-            normalized_pair_error = 0.0
-            zeroed_out = True
+        if b_C == 0 or n_C == 0:
+            independent_top_probability = 0.0
+            independent_route_probability = 0.0
+            independent_error = 0.0
+            independent_false_zero = True
         else:
-            normalized_independent_error = raw_error / C
+            b_top_probability, b_top_state, _, _ = f2g.top_choice_prob(b_next)
+            n_top_probability, n_top_state, _, _ = f2g.top_choice_prob(n_next)
+
+            b_route_probability, _, _ = f2g.transition_prob_from_counts(b_next, B1)
+            n_route_probability, _, _ = f2g.transition_prob_from_counts(n_next, N1)
+
+            independent_top_probability = (b_top_probability * n_top_probability)
+            independent_route_probability = (b_route_probability * n_route_probability)
+            independent_raw_error = (independent_top_probability - independent_route_probability)
+            normalized_independent_error = independent_raw_error / C
+            independent_false_zero = False
+
+        if pair_C == 0:
+            pair_top_probability = 0.0
+            pair_route_probability = 0.0
+            pair_error = 0.0
+            pair_false_zero = True
+            pair_top_state = None
+        else:
+            pair_top_probability, pair_top_state, _, _ = (f2g.top_choice_prob(pair_next))
+            pair_route_probability, _, _ = (f2g.transition_prob_from_counts(pair_next, (B1, N1)))
+            pair_raw_error = (pair_top_probability - pair_route_probability)
             normalized_pair_error = pair_raw_error / C
-            zeroed_out = False
+            pair_false_zero = False
 
         error_history.append({
             "frame": frame_idx,
@@ -553,73 +559,73 @@ def calc_stage3_error(route_sequence, original_b_dict, original_n_dict, original
             "N0": N0,
             "B1": B1,
             "N1": N1,
+            "observed_count": observed_count,
 
-            "original_probability": original_independent_probability,
-            "updated_probability": updated_independent_probability,
-            "raw_error": raw_error,
+            "independent_raw_error": independent_raw_error,
             "normalized_independent_error": normalized_independent_error,
-            "normalized_pair_error": normalized_pair_error,
-            "original_pair_probability": original_pair_prob,
-            "updated_pair_probability": updated_pair_prob,
+            "independent_top_probability": independent_top_probability,
+            "independent_route_probability": independent_route_probability,
+            "independent_false_zero": independent_false_zero,
+
             "pair_raw_error": pair_raw_error,
-            "C": C,
-            "zeroed_out": zeroed_out
+            "normalized_pair_error": normalized_pair_error,
+            "pair_top_probability": pair_top_probability,
+            "pair_route_probability": pair_route_probability,
+            "pair_top_state": pair_top_state,
+            "pair_false_zero": pair_false_zero,
+
+            "b_C": b_C,
+            "n_C": n_C,
+            "pair_C": pair_C,
+            "C": C
         })
 
     return error_history
 
-def plot_stage3_error(error_history, title="Stage 3 Perturbation Error Plot", save_path=None):
+def plot_stage3_error(error_history, title="Stage 3 Fixed-Route Error", save_path=None, include_pair_error=True):
     frames = [row["frame"] for row in error_history]
-    values = [row["normalized_independent_error"] for row in error_history]
-    zeroed_idx = [i for i, row in enumerate(error_history) if row["zeroed_out"]]
-    true_zero_idx = [i for i, row in enumerate(error_history) if (row["normalized_independent_error"] == 0.0 and not row["zeroed_out"])]
+
+    independent_errors = [row["normalized_independent_error"] for row in error_history]
 
     plt.figure(figsize=(12, 7))
-    plt.plot(frames, values, marker="o", linewidth=1.8, label="Independent transition error")
+    plt.plot(frames, independent_errors, marker="o", markersize=4, linewidth=1.8, label="Independent B × N error")
+
+    independent_false_frames = [row["frame"] for row in error_history if row["independent_false_zero"]]
+    independent_false_values = [row["normalized_independent_error"] for row in error_history if row["independent_false_zero"]]
+
+    if independent_false_frames:
+        plt.scatter(independent_false_frames, independent_false_values, marker="X", s=100, color="red", edgecolors="black", linewidths=0.7, zorder=10, label="Independent error forced to 0 (C = 0)")
+
+    if include_pair_error:
+        pair_errors = [row["normalized_pair_error"] for row in error_history]
+        plt.plot(frames, pair_errors, marker="o", markersize=4, linewidth=1.8, label="Pair-transition error")
+
+        pair_false_frames = [row["frame"] for row in error_history if row["pair_false_zero"]]
+        pair_false_values = [row["normalized_pair_error"] for row in error_history if row["pair_false_zero"]]
+
+        if pair_false_frames:
+            plt.scatter(pair_false_frames, pair_false_values, marker="D", s=80, color="gold", edgecolors="black", linewidths=0.7, zorder=10, label="Pair error forced to 0 (C = 0)")
+
     plt.axhline(0.0, linestyle="--", linewidth=1)
-
-    if zeroed_idx:
-        plt.scatter(
-            [frames[i] for i in zeroed_idx],
-            [values[i] for i in zeroed_idx],
-            marker="X",
-            s=100,
-            c="red",
-            edgecolors="black",
-            zorder=5,
-            label="Zeroed out (C = 0)"
-        )
-
-    if true_zero_idx:
-        plt.scatter(
-            [frames[i] for i in true_zero_idx],
-            [values[i] for i in true_zero_idx],
-            marker="s",
-            s=55,
-            facecolors="none",
-            edgecolors="green",
-            zorder=4,
-            label="True zero error"
-        )
-
-    plt.xlabel("Time Steps")
-    plt.ylabel("Normalized probability error")
+    plt.xlabel("Time step along original fixed route")
+    plt.ylabel("Stage 3 error\n(top-1 probability − fixed-route probability) / C")
     plt.title(title)
+    plt.grid(alpha=0.25)
     plt.legend()
     plt.tight_layout()
 
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
     plt.show()
 
-
-def plot_normalized_error_over_time(error_history, title, x_label, include_pair_error=False, save_path=None, show_points=True):
+def plot_stage2_normalized_error_over_time(error_history, title, x_label, include_pair_error=False, save_path=None, show_points=True):
     frames = [item["frame"] for item in error_history]
     normalized_errors = [item["normalized_independent_error"] for item in error_history]
 
     marker = "o" if show_points else None
 
-    plt.figure(figsize=(11, 5.5))
+    plt.figure(figsize=(18, 6))
     plt.plot(frames, normalized_errors, marker=marker, markersize=3, linewidth=1.6, label="Independent transition error")
   
     if include_pair_error:
@@ -645,11 +651,12 @@ def plot_normalized_error_over_time(error_history, title, x_label, include_pair_
     plt.title(title)
 
     plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
+    plt.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+    plt.tight_layout(rect=[0, 0, 0.80, 1])
 
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.subplots_adjust(right=0.78)
     plt.show()
 
     print("Mean normalized error:", np.mean(normalized_errors))
@@ -685,6 +692,8 @@ if __name__ == "__main__":
     #graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
     #graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
     #graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    plot_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
-    stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
-    plot_stage3_error(stage_3_error_his, title="Stage 3 Perturbation Error Plot", save_path="stage3_normalized_error_over_time.png")
+    plot_stage2_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
+    pre_perturb_stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict)
+    plot_stage3_error(pre_perturb_stage_3_error_his, title="Stage 3 Pre-Perturbation Error Plot", save_path="pre_perturb_stage3_normalized_error_over_time.png")
+    post_perturb_stage_3_error_his = calc_stage3_error(route_seq, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
+    plot_stage3_error(post_perturb_stage_3_error_his, title="Stage 3 Post-Perturbation Error Plot", save_path="post_perturb_stage3_normalized_error_over_time.png")
