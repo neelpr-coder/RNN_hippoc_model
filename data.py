@@ -2,11 +2,21 @@ import os
 import pandas as pd
 from collections import defaultdict
 
-def image_preproccesing(file_path = os.path.expanduser("~/Desktop/unity/10x10/metadata.csv")): 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def image_preproccesing(file_path = None): 
     """preprocess the csv file to create tuple of 
     (x,y,heading) behavioral states, associated image, isValid, and visit_count that can be unpacked in initial training"""
+    if file_path is None:
+        data_dir = os.environ.get("RNN_DATA_DIR", os.path.join(SCRIPT_DIR, "data"))
+        file_path = os.path.join(data_dir, "metadata.csv")
+
     if not os.path.exists(file_path):
-        raise ValueError("not a valid file")
+        raise ValueError(
+            f"Metadata file not found: {file_path}\n"
+            "Place the Unity dataset in the repository's data/ folder "
+            "or set the RNN_DATA_DIR environment variable."
+        )
 
     df = pd.read_csv(file_path, sep=',', engine='python')
     #print(df.columns)
