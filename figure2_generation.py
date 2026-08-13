@@ -616,7 +616,7 @@ def sweep_data_gen(net, step_size=5, min_attempts=50, max_attempts=101, sd=42):
 
     return results
 
-def b_state_distribution_barplots():
+def b_state_distribution_barplots(model):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -765,7 +765,7 @@ def bin_neural_states(counts, bin_size, reduce="sum"):
 
         return binned_values, bin_labels
 
-def n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce="mean"):
+def n_state_distribution_overlay_binned_barplots(model, top_k=100, bin_size=20, reduce="mean"):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -897,12 +897,7 @@ def n_state_distribution_histograms_individual(bin_size=100):
         plt.tight_layout(rect=[0, 0, 1, 0.92])
         plt.show()
 
-def n_state_histogram_overlay_binned(
-    bin_size=100,
-    reduce_to_same_bins=True,
-    max_display_bin=1000,
-    log_y=True
-):
+def n_state_histogram_overlay_binned(model, bin_size=100, reduce_to_same_bins=True, max_display_bin=1000, log_y=True):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -1004,7 +999,7 @@ def n_state_histogram_overlay_binned(
     plt.tight_layout()
     plt.show()
 
-def n_state_distribution_summary():
+def n_state_distribution_summary(model):
     sweep_results = sweep_data_gen(
         model,
         step_size=5,
@@ -1081,7 +1076,7 @@ def b_state_distribution_heatmap(all_visit_count_b_dict, agg="mean", show=True):
     
     return grid, x_vals, y_vals
 
-def n_state_distribution_heatmap(b_to_n_states_dict, agg="union", show=True):
+def n_state_distribution_heatmap( b_to_n_states_dict, agg="union", show=True):
     coord_to_heading_counts = defaultdict(list)
     coord_to_n_union = defaultdict(set)
 
@@ -1142,12 +1137,12 @@ def normalize_grid(grid):
 
     return (grid - grid_min) / (grid_max - grid_min)
 
-def joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union"):
-    """Generate a heatmap showing the joint distribution of neural and behavioral states. Generate from the overlay
-    of the two heatmaps."""
-    b_grid, b_x_vals, b_y_vals = b_state_distribution_heatmap(all_visit_count_b_dict_100, agg="mean", show=False)
-    n_grid, n_x_vals, n_y_vals = n_state_distribution_heatmap(b_to_n_dict, agg="union", show=False)
-    
+def joint_b_n_dist_heatmap(all_visit_count_b_dict, b_to_n_dict, normalize=True, b_agg="mean", n_agg="union"):
+    """Generate a heatmap showing the joint distribution of neural and behavioral states."""
+
+    b_grid, b_x_vals, b_y_vals = b_state_distribution_heatmap(all_visit_count_b_dict, agg=b_agg, show=False)
+    n_grid, n_x_vals, n_y_vals = n_state_distribution_heatmap(b_to_n_dict, agg=n_agg, show=False)
+
     if b_x_vals != n_x_vals or b_y_vals != n_y_vals:
         raise ValueError("Behavioral grid and neural grid coordinates do not match.")
 
@@ -1162,17 +1157,11 @@ def joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union"):
 
     plt.figure(figsize=(8, 6))
     im = plt.imshow(joint_grid, origin="lower", aspect="auto")
-
-    plt.title(
-        f"Joint Behavioral-Neural Distribution\n"
-        f"b_agg={b_agg}, n_agg={n_agg}, normalize={normalize}"
-    )
+    plt.title(f"Joint Behavioral-Neural Distribution\nb_agg={b_agg}, n_agg={n_agg}, normalize={normalize}")
     plt.xlabel("x coordinate")
     plt.ylabel("y coordinate")
-
     plt.xticks(range(len(b_x_vals)), b_x_vals)
     plt.yticks(range(len(b_y_vals)), b_y_vals)
-
     plt.colorbar(im, label=colorbar_label)
     plt.tight_layout()
     plt.show()
