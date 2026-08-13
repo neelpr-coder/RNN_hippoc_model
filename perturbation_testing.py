@@ -215,6 +215,10 @@ def run_pertubation(model, b_transition_dict, joint_transition_dict, total_num_p
     random.seed(sd)
     is_first_visit = True
 
+    shutil.copy(ORIGINAL_N_PATH, n_path_copy)
+    shutil.copy(ORIGINAL_B_PATH, b_path_copy)
+    shutil.copy(ORIGINAL_PAIR_PATH, pair_path_copy)
+
     with np.load(ORIGINAL_N_PATH, allow_pickle=True) as original_n_file:
         original_n_transition_dict = (original_n_file["neural_state_dict"].item())
 
