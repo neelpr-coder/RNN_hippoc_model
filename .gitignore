@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .DS_Store
 RNN_cache/
+data/
 *_transition_probabilities.json
 behavioral_neural_state_table.json
 17x17_arena_data/
