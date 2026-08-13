@@ -789,7 +789,6 @@ def plot_pre_post_error_distribution(pre_history, post_history, error_bin_width=
     plt.bar(x + width / 2, post_counts, width, label="Post-perturbation")
     plt.xlabel("Error range")
     plt.ylabel("Number of errors")
-    plt.yscale("log")
     plt.title(title)
     plt.xticks(x, labels, rotation=45, ha="right")
     plt.legend()
@@ -826,7 +825,6 @@ if __name__ == "__main__":
     pre_error_history = calc_connected_stage3_error_history(route, original_dicts)
 
     perturbation_results = cme.run_connected_knockout_experiments(model, b_transition_dict, Na_transition_dict, Nb_transition_dict, Na_b_transition_dict, Nb_b_transition_dict, Na_Nb_transition_dict, Na_Nb_b_transition_dict, total_perturbations=4000, sd=42, save_dir=os.path.join(SCRIPT_DIR, "Perturbation_Connected_Cache"))
-    route = perturbation_results["a"]["route"]
 
     '''stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
@@ -834,18 +832,25 @@ if __name__ == "__main__":
     plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions_4000.png")
 
     for region in ("a", "b", "both"):
-        plot_signed_errors_histogram(stage2_histories[region], bin_size=200, title=f"{region.upper()} Knockout: Positive/Negative Errors per 200 Perturbations", save_path=None)
-'''
-    #post_error_histories = {}
-    #error_change_histories = {}
+        plot_signed_errors_histogram(stage2_histories[region], bin_size=200, title=f"{region.upper()} Knockout: Positive/Negative Errors per 200 Perturbations", save_path=None)'''
 
-    '''for region in ("a", "b", "both"):
+    post_error_histories = {}
+    error_change_histories = {}
+
+    for region in ("a", "b", "both"):
         updated_dicts = perturbation_results[region]["dicts"]
         post_error_histories[region] = calc_connected_stage3_error_history(route, updated_dicts)
         #error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
+    
+    for region in ("a", "b", "both"):
+        print(
+            region,
+            "pre length =", len(pre_error_history),
+            "post length =", len(post_error_histories[region])
+        )
 
     for region in ("a", "b", "both"):
-        plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)'''
+        plot_pre_post_error_distribution(pre_error_history, post_error_histories[region], error_bin_width=0.05, title=f"{region.upper()} Knockout: Error Distribution Pre/Post Perturbation", save_path=None)
 
     '''for region in ("a", "b", "both"):
         plot_connected_error_change(error_change_histories[region], title=f"{region.upper()} Knockout: Change in Fixed-Route Error", save_path=None)'''
@@ -873,14 +878,14 @@ if __name__ == "__main__":
         error_change_histories[region] = calc_connected_error_change(pre_error_history, post_error_histories[region])
     plot_all_error_change_conditions(error_change_histories, save_path="change_in_error_post_pre_perturb_connected_model.png")'''
     
-    stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
+    '''stage2_histories = {region: perturbation_results[region]["stage2_error_history"] for region in ("a", "b", "both")}
     for region in ("a", "b", "both"):
         plot_connected_stage2_error_overlay(
             stage2_histories[region],
             title=f"Stage 2 Error During {region.upper()} Knockout",
             save_path=None
         )
-    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")
+    plot_all_stage2_conditions(stage2_histories, save_path="connected_stage2_error_all_conditions.png")'''
     
     '''
     stage3_histories = {}
