@@ -44,24 +44,10 @@ def get_top_n_states(sweep_results, min_attempts, top_k=100):
     return n_states, counts
 
 
-def neural_state_pearson_confusion_matrix(
-    sweep_results,
-    min_attempts_a,
-    min_attempts_b,
-    top_k=100
-):
+def neural_state_pearson_confusion_matrix(sweep_results, min_attempts_a, min_attempts_b, top_k=100):
 
-    n_states_a, counts_a = get_top_n_states(
-        sweep_results,
-        min_attempts=min_attempts_a,
-        top_k=top_k
-    )
-
-    n_states_b, counts_b = get_top_n_states(
-        sweep_results,
-        min_attempts=min_attempts_b,
-        top_k=top_k
-    )
+    n_states_a, counts_a = get_top_n_states(sweep_results, min_attempts=min_attempts_a, top_k=top_k)
+    n_states_b, counts_b = get_top_n_states(sweep_results, min_attempts=min_attempts_b, top_k=top_k)
 
     matrix = np.full((len(n_states_b), len(n_states_a)), np.nan)
 
@@ -75,23 +61,10 @@ def neural_state_pearson_confusion_matrix(
     return matrix, x_labels, y_labels, counts_a, counts_b
 
 
-def plot_neural_state_pearson_confusion_matrix(
-    matrix,
-    x_labels,
-    y_labels,
-    title,
-    tick_step=10
-):
+def plot_neural_state_pearson_confusion_matrix(matrix, x_labels, y_labels, title, tick_step=10):
     plt.figure(figsize=(10, 8))
 
-    im = plt.imshow(
-        matrix,
-        origin="lower",
-        aspect="auto",
-        vmin=-1,
-        vmax=1,
-        cmap="viridis"
-    )
+    im = plt.imshow(matrix, origin="lower", aspect="auto", vmin=-1, vmax=1, cmap="viridis")
 
     plt.title(title)
     plt.xlabel("Neural states from first distribution")
@@ -100,19 +73,8 @@ def plot_neural_state_pearson_confusion_matrix(
     x_tick_positions = np.arange(0, len(x_labels), tick_step)
     y_tick_positions = np.arange(0, len(y_labels), tick_step)
 
-    plt.xticks(
-        x_tick_positions,
-        [x_labels[i] for i in x_tick_positions],
-        rotation=45,
-        ha="right",
-        fontsize=8
-    )
-
-    plt.yticks(
-        y_tick_positions,
-        [y_labels[i] for i in y_tick_positions],
-        fontsize=8
-    )
+    plt.xticks(x_tick_positions, [x_labels[i] for i in x_tick_positions], rotation=45, ha="right", fontsize=8)
+    plt.yticks(y_tick_positions, [y_labels[i] for i in y_tick_positions], fontsize=8)
 
     plt.colorbar(im, label="Pearson correlation")
     plt.tight_layout()
@@ -280,8 +242,16 @@ if __name__ == "__main__":
         max_attempts=101,
         sd=42
     )
+    matrix_50_100_p, x_labels, y_labels, counts_a, counts_b = neural_state_pearson_confusion_matrix(sweep_results, min_attempts_a=50, min_attempts_b=100, top_k=100)
+    plot_neural_state_pearson_confusion_matrix(
+        matrix_50_100_p,
+        x_labels,
+        y_labels,
+        title="Pearson Correlation Between Top Neural States: min50 vs min100",
+        tick_step=10
+    )
 
-    neural_state_vector_similarity_heatmaps(sweep_results=sweep_results, top_k=100)
+    '''neural_state_vector_similarity_heatmaps(sweep_results=sweep_results, top_k=100)
     matrix_50_55_euc, x_labels_50, y_labels_55, counts_50, counts_55 = neural_state_euclidean_confusion_matrix(
             sweep_results,
             min_attempts_a=50,
@@ -310,4 +280,4 @@ if __name__ == "__main__":
             y_labels_100,
             title="Euclidean Distance Between Top Neural States: min50 vs min100",
             tick_step=10
-        )
+        )'''
