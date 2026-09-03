@@ -3,14 +3,14 @@ import pandas as pd
 from collections import defaultdict
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGE_DIR = os.environ.get("RNN_IMAGE_DIR", "/Users/neelprabhakar/Desktop/unity/10x10")
 
 def image_preproccesing(file_path = None): 
     """preprocess the csv file to create tuple of 
     (x,y,heading) behavioral states, associated image, isValid, and visit_count that can be unpacked in initial training"""
     if file_path is None:
-        data_dir = os.environ.get("RNN_DATA_DIR", os.path.join(SCRIPT_DIR, "data"))
+        data_dir = os.environ.get("RNN_DATA_DIR", os.path.join(SCRIPT_DIR, "10x10_dataset"))
         file_path = os.path.join(data_dir, "metadata.csv")
-
     if not os.path.exists(file_path):
         raise ValueError(
             f"Metadata file not found: {file_path}\n"
@@ -23,7 +23,7 @@ def image_preproccesing(file_path = None):
     b_state_image_path_dict = defaultdict(list)
     all_visit_counts_dict = defaultdict(int)
 
-    image_dir = os.path.dirname(file_path)
+    image_dir = IMAGE_DIR
     for row in df.itertuples(index=False):
         b_state = (int(row.x + 4.5), int(row.z + 4.5), int(row.rotation_index))
 

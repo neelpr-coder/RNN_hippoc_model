@@ -21,6 +21,8 @@ ORIGINAL_N_PATH = "RNN_cache/n_state/n_state_min100_max151_sd42_bin_size0.3.npz"
 ORIGINAL_B_PATH = "RNN_cache/b_state/b_state_min100_max151_sd42_bin_size0.3.npz"
 ORIGINAL_PAIR_PATH = "RNN_cache/pair_transition/pair_transition_min100_max151_sd42_bin_size0.3.npz"
 
+plt.rcParams['svg.fonttype'] = 'none'
+
 if torch.backends.mps.is_available():
     device = torch.device("mps")
 else:
@@ -623,9 +625,10 @@ def plot_stage3_error(error_history, title="Stage 3 Fixed-Route Error", save_pat
 
     plt.show()
 
-def plot_stage2_normalized_error_over_time(error_history, title, x_label, include_pair_error=False, save_path=None, show_points=True):
-    frames = [item["frame"] for item in error_history]
-    normalized_errors = [item["normalized_independent_error"] for item in error_history]
+def plot_stage2_normalized_error_over_time(error_history, x_label, include_pair_error=False, save_path=None, show_points=True):
+    error_histories_f100 = error_history[:100] if len(error_history) > 100 else error_history
+    frames = [item["frame"] for item in error_histories_f100]
+    normalized_errors = [item["normalized_independent_error"] for item in error_histories_f100]
 
     marker = "o" if show_points else None
 
@@ -633,7 +636,7 @@ def plot_stage2_normalized_error_over_time(error_history, title, x_label, includ
     plt.plot(frames, normalized_errors, marker=marker, markersize=3, linewidth=1.6, label="Independent transition error")
   
     if include_pair_error:
-        normalized_pair_errors = [item["normalized_pair_error"] for item in error_history]
+        normalized_pair_errors = [item["normalized_pair_error"] for item in error_histories_f100]
         plt.plot(frames, normalized_pair_errors, marker=marker, markersize=3, linewidth=1.6, label="Paired transition error")
         
         frozen_styles = [
@@ -643,23 +646,22 @@ def plot_stage2_normalized_error_over_time(error_history, title, x_label, includ
         ]
 
         for flag, marker_shape, color, label in frozen_styles:
-            frozen_frames = [row["frame"] for row in error_history if row.get(flag, False)]
-            frozen_errors = [row["normalized_pair_error"] for row in error_history if row.get(flag, False)]
+            frozen_frames = [row["frame"] for row in error_histories_f100 if row.get(flag, False)]
+            frozen_errors = [row["normalized_pair_error"] for row in error_histories_f100 if row.get(flag, False)]
 
             if frozen_frames:
                 plt.scatter(frozen_frames, frozen_errors, marker=marker_shape, s=90, color=color, edgecolors="black", linewidths=0.7, zorder=10, label=label)
 
     plt.axhline(y=0, linestyle="--", linewidth=1.0, alpha=0.6)
-    plt.xlabel(x_label)
-    plt.ylabel("Normalized probability error")
-    plt.title(title)
+    plt.xlabel(x_label, fontsize=20, font="Arial")
+    plt.ylabel("Normalized probability error", fontsize=20, font="Arial")
 
     plt.grid(True, alpha=0.3)
-    plt.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+    plt.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=17)
     plt.tight_layout(rect=[0, 0, 0.80, 1])
 
     if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=300, bbox_inches="tight", format="svg")
     plt.subplots_adjust(right=0.78)
     plt.show()
 
@@ -696,8 +698,8 @@ if __name__ == "__main__":
     #graph_neural_distribution(og_n_dict, title="Original Neural-State Outgoing Transition Distribution")
     #graph_behavioral_distribution(new_b_t_dict, title="Updated Behavioral-State Outgoing Transition Counts", collapse_headings=False)
     #graph_behavioral_distribution(og_b_dict, title="Original Behavioral-State Outgoing Transition Counts", collapse_headings=False)
-    plot_stage2_normalized_error_over_time(stage_2_error_his, title="Stage 2 Perturbation Error Plot", x_label="Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
-    pre_perturb_stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict)
-    plot_stage3_error(pre_perturb_stage_3_error_his, title="Stage 3 Pre-Perturbation Error Plot", save_path="pre_perturb_stage3_normalized_error_over_time.png")
-    post_perturb_stage_3_error_his = calc_stage3_error(route_seq, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
-    plot_stage3_error(post_perturb_stage_3_error_his, title="Stage 3 Post-Perturbation Error Plot", save_path="post_perturb_stage3_normalized_error_over_time.png")
+    plot_stage2_normalized_error_over_time(stage_2_error_his, x_label="100 Pertubation Steps", include_pair_error=True, save_path="stage2_normalized_error_over_time.png")
+    #pre_perturb_stage_3_error_his = calc_stage3_error(route_seq, og_b_dict, og_n_dict, og_pair_dict)
+    #plot_stage3_error(pre_perturb_stage_3_error_his, title="Stage 3 Pre-Perturbation Error Plot", save_path="pre_perturb_stage3_normalized_error_over_time.png")
+    #post_perturb_stage_3_error_his = calc_stage3_error(route_seq, new_b_t_dict, new_n_t_dict, new_pair_t_dict)
+    #plot_stage3_error(post_perturb_stage_3_error_his, title="Stage 3 Post-Perturbation Error Plot", save_path="post_perturb_stage3_normalized_error_over_time.png")

@@ -617,15 +617,9 @@ def sweep_data_gen(net, step_size=5, min_attempts=50, max_attempts=101, sd=42):
     return results
 
 def b_state_distribution_barplots(model):
-    sweep_results = sweep_data_gen(
-        model,
-        step_size=5,
-        min_attempts=50,
-        max_attempts=101,
-        sd=42
-    )
+    sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
 
-    min_attempt_values = sorted(sweep_results.keys())
+    min_attempt_values = (50, 100)
 
     plots_per_page = 2
     cols = 2
@@ -647,8 +641,7 @@ def b_state_distribution_barplots(model):
             for b_state, visit_count in b_state_dict.items():
                 x_coord, y_coord, heading = b_state
 
-                # Collapse across rotations/headings
-                coord = (x_coord, y_coord, heading)
+                coord = (x_coord, y_coord, heading * 90)
                 coord_visit_counts[coord] += visit_count
 
             sorted_coords = sorted(coord_visit_counts.keys())
@@ -657,9 +650,9 @@ def b_state_distribution_barplots(model):
 
             ax.bar(labels, counts, width=0.8)
 
-            ax.set_title(f"min_attempts = {min_attempts}", fontsize=12)
-            ax.set_xlabel("Behavioral coordinate", fontsize=10)
-            ax.set_ylabel("Number of visits", fontsize=10)
+            ax.set_title(f"min_visits = {min_attempts}", fontsize=17, font="Arial")
+            ax.set_xlabel("Behavioral State Coordinate", fontsize=17, font="Arial")
+            ax.set_ylabel("Number of Visits", fontsize=17, font="Arial")
 
             # y-axis increments of 50
             y_max = max(counts)
@@ -669,17 +662,11 @@ def b_state_distribution_barplots(model):
             # show only every 10th neural state label
             tick_step = 10
             ax.set_xticks(range(0, len(labels), tick_step))
-            ax.set_xticklabels(labels[::tick_step], rotation=60, ha="right", fontsize=6)
+            ax.set_xticklabels(labels[::tick_step], rotation=60, ha="right", fontsize=6, font="Arial")
             ax.grid(axis="y", alpha=0.5)
 
         for j in range(len(page_values), len(axes)):
             axes[j].axis("off")
-
-
-        fig.suptitle(
-            f"Behavioral Coordinate Visit Counts Across min_attempts",
-            fontsize=14
-        )
 
         plt.tight_layout(rect=[0, 0, 1, 0.92])
         plt.show()
@@ -766,19 +753,13 @@ def bin_neural_states(counts, bin_size, reduce="sum"):
         return binned_values, bin_labels
 
 def n_state_distribution_overlay_binned_barplots(model, top_k=100, bin_size=20, reduce="mean"):
-    sweep_results = sweep_data_gen(
-        model,
-        step_size=5,
-        min_attempts=50,
-        max_attempts=101,
-        sd=42
-    )
+    sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
 
-    min_attempt_values = sorted(sweep_results.keys())
+    min_attempt_values = (50, 55, 75, 95, 100)
 
     plt.figure(figsize=(12, 7))
 
-    colors = plt.cm.tab20(np.linspace(0, 1, len(min_attempt_values)))
+    colors = plt.cm.Dark2(np.linspace(0, 1, len(min_attempt_values)))
 
     num_sweeps = len(min_attempt_values)
     group_width = 0.85
@@ -789,48 +770,30 @@ def n_state_distribution_overlay_binned_barplots(model, top_k=100, bin_size=20, 
 
         sorted_counts = sorted(n_state_dict.values(), reverse=True)
         top_counts = sorted_counts[:top_k]
+        total_visits = sum(n_state_dict.values())
 
-        binned_values, bin_labels = bin_neural_states(
-            top_counts,
-            bin_size=bin_size,
-            reduce=reduce
-        )
-
+        binned_counts, bin_labels = bin_neural_states(top_counts, bin_size=bin_size, reduce="sum")
+        binned_values = [(count / total_visits) * 100 if total_visits > 0 else 0 for count in binned_counts]
         base_positions = np.arange(len(bin_labels))
 
         offset = (sweep_idx - num_sweeps / 2) * bar_width + bar_width / 2
         x_positions = base_positions + offset
 
-        plt.bar(
-            x_positions,
-            binned_values,
-            width=bar_width,
-            color=color,
-            edgecolor="black",
-            linewidth=0.3,
-            label=f"min={min_attempts}"
-        )
+        plt.bar(x_positions, binned_values, width=bar_width, color=color, edgecolor="black", linewidth=0.3, label=f"min={min_attempts}")
 
-    plt.title(
-        f"Binned Top {top_k} Neural State Visit Counts Across min_attempts\n"
-        f"{bin_size} neural states per bin, reduce={reduce}"
-    )
-    plt.xlabel("Neural state rank bin")
+    plt.xlabel("Neural state rank bin", fontsize=20, font='Arial')
     
     if reduce == "mean":
-        plt.ylabel("Average visits per neural state")
+        plt.ylabel("Average visits per neural state", fontsize=20, font='Arial')
+    elif reduce == "percent":
+        plt.ylabel("Percent of total visits of top 100 Neural States", fontsize=20, font='Arial')
     else:
-        plt.ylabel("Total visits per rank bin")
+        plt.ylabel("Total visits per rank bin", fontsize=20, font='Arial')
 
-    plt.xticks(
-        range(len(bin_labels)),
-        bin_labels,
-        rotation=45,
-        ha="right"
-    )
+    plt.xticks(range(len(bin_labels)), bin_labels, rotation=70, ha="right", fontsize=60, font='Arial')
 
     plt.grid(axis="y", alpha=0.5)
-    plt.legend(title="min_attempts", fontsize=8)
+    plt.legend(title="min_attempts", fontsize=15, title_fontsize=15)
     plt.tight_layout()
     plt.show()
 
@@ -898,31 +861,22 @@ def n_state_distribution_histograms_individual(bin_size=100):
         plt.show()
 
 def n_state_histogram_overlay_binned(model, bin_size=100, reduce_to_same_bins=True, max_display_bin=1000, log_y=True):
-    sweep_results = sweep_data_gen(
-        model,
-        step_size=5,
-        min_attempts=50,
-        max_attempts=101,
-        sd=42
-    )
+    sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
 
-    min_attempt_values = sorted(sweep_results.keys())
+    min_attempt_values = (50, 55, 75, 95, 100)
 
-    # Collect all visit counts for each sweep
     all_counts_by_min = {}
     for min_attempts in min_attempt_values:
         n_state_dict = sweep_results[min_attempts]["all_visit_count_n_dict"]
         all_counts_by_min[min_attempts] = list(n_state_dict.values())
 
-    # If max_display_bin is not provided, use rounded global max
+
     if max_display_bin is None:
         global_max_count = max(max(counts) for counts in all_counts_by_min.values())
         max_display_bin = math.ceil(global_max_count / bin_size) * bin_size
 
-    # Build fixed bins up to max_display_bin
     bins = list(range(0, max_display_bin + bin_size, bin_size))
 
-    # Labels for regular bins
     bin_labels = []
     for i in range(len(bins) - 1):
         start = bins[i]
@@ -932,12 +886,12 @@ def n_state_histogram_overlay_binned(model, bin_size=100, reduce_to_same_bins=Tr
         else:
             bin_labels.append(f"{start + 1}-{end}")
 
-    # Add one overflow bin label
+  
     bin_labels.append(f">{max_display_bin}")
 
     base_positions = np.arange(len(bin_labels))
 
-    colors = plt.cm.tab20(np.linspace(0, 1, len(min_attempt_values)))
+    colors = plt.cm.Dark2(np.linspace(0, 1, len(min_attempt_values)))
 
     num_sweeps = len(min_attempt_values)
     group_width = 0.85
@@ -947,54 +901,26 @@ def n_state_histogram_overlay_binned(model, bin_size=100, reduce_to_same_bins=Tr
 
     for sweep_idx, (color, min_attempts) in enumerate(zip(colors, min_attempt_values)):
         visit_counts = np.array(all_counts_by_min[min_attempts])
-
-        # Histogram counts for regular bins
         hist_counts, _ = np.histogram(visit_counts, bins=bins)
-
-        # Overflow bin: counts greater than max_display_bin
         overflow_count = np.sum(visit_counts > max_display_bin)
-
-        # Append overflow bin
         hist_counts = np.append(hist_counts, overflow_count)
 
         offset = (sweep_idx - num_sweeps / 2) * bar_width + bar_width / 2
         x_positions = base_positions + offset
 
-        plt.bar(
-            x_positions,
-            hist_counts,
-            width=bar_width,
-            color=color,
-            edgecolor="black",
-            linewidth=0.3,
-            label=f"min={min_attempts}"
-        )
+        plt.bar(x_positions, hist_counts, width=bar_width, color=color, edgecolor="black", linewidth=0.3, label=f"min={min_attempts}")
 
-    plt.title(
-        f"Neural State Visit Count Distribution Across min_attempts\n"
-        f"Visit-count bin size = {bin_size}, tail grouped as >{max_display_bin}"
-    )
-    plt.xlabel("Visit-count bin")
-    plt.ylabel("Number of neural states")
+    plt.xlabel("Visit-count bin", fontsize=25, font='Arial')
+    plt.ylabel("Number of neural states", fontsize=25, font='Arial')
 
-    plt.xticks(
-        base_positions,
-        bin_labels,
-        rotation=45,
-        ha="right"
-    )
-
+    plt.xticks(base_positions, bin_labels, rotation=45, ha="right", fontsize=1000, font='Arial')
     plt.grid(axis="y", alpha=0.5)
 
     if log_y:
         plt.yscale("log")
+    plt.yticks(fontsize=1000, font='Arial')
 
-    plt.legend(
-        title="min_attempts",
-        fontsize=8,
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left"
-    )
+    plt.legend(title="min_attempts", fontsize=15, title_fontsize=15)
 
     plt.tight_layout()
     plt.show()
@@ -1063,14 +989,13 @@ def b_state_distribution_heatmap(all_visit_count_b_dict, agg="mean", show=True):
         plt.figure(figsize=(8, 6))
         im = plt.imshow(grid, origin="lower", aspect="auto")
 
-        plt.title(f"Behavioral State Visit Count Heatmap, agg={agg}")
-        plt.xlabel("x coordinate")
-        plt.ylabel("y coordinate")
+        plt.xlabel("x coordinate", fontsize=20, font='Arial')
+        plt.ylabel("y coordinate", fontsize=20, font='Arial')
 
-        plt.xticks(range(len(x_vals)), x_vals)
-        plt.yticks(range(len(y_vals)), y_vals)
+        plt.xticks(range(len(x_vals)), x_vals, fontsize=20, font='Arial')
+        plt.yticks(range(len(y_vals)), y_vals, fontsize=20, font='Arial')
 
-        plt.colorbar(im, label="Number of visits")
+        plt.colorbar(im, label="Number of visits to each behavioral state")
         plt.tight_layout()
         plt.show()
     
@@ -1115,12 +1040,11 @@ def n_state_distribution_heatmap( b_to_n_states_dict, agg="union", show=True):
         plt.figure(figsize=(8, 6))
         im = plt.imshow(grid, origin="lower", aspect="auto")
 
-        plt.title(f"Associated Neural States per Coordinate, agg={agg}")
-        plt.xlabel("x coordinate")
-        plt.ylabel("y coordinate")
+        plt.xlabel("x coordinate", fontsize=20, font='Arial')
+        plt.ylabel("y coordinate", fontsize=20, font='Arial')
 
-        plt.xticks(range(len(x_vals)), x_vals)
-        plt.yticks(range(len(y_vals)), y_vals)
+        plt.xticks(range(len(x_vals)), x_vals, fontsize=20, font='Arial')
+        plt.yticks(range(len(y_vals)), y_vals, fontsize=20, font='Arial')
 
         plt.colorbar(im, label="Number of associated neural states")
         plt.tight_layout()
@@ -1157,24 +1081,17 @@ def joint_b_n_dist_heatmap(all_visit_count_b_dict, b_to_n_dict, normalize=True, 
 
     plt.figure(figsize=(8, 6))
     im = plt.imshow(joint_grid, origin="lower", aspect="auto")
-    plt.title(f"Joint Behavioral-Neural Distribution\nb_agg={b_agg}, n_agg={n_agg}, normalize={normalize}")
-    plt.xlabel("x coordinate")
-    plt.ylabel("y coordinate")
-    plt.xticks(range(len(b_x_vals)), b_x_vals)
-    plt.yticks(range(len(b_y_vals)), b_y_vals)
+    plt.xlabel("x coordinate", fontsize=20, font='Arial')
+    plt.ylabel("y coordinate", fontsize=20, font='Arial')
+    plt.xticks(range(len(b_x_vals)), b_x_vals, fontsize=20, font='Arial')
+    plt.yticks(range(len(b_y_vals)), b_y_vals, fontsize=20, font='Arial')
     plt.colorbar(im, label=colorbar_label)
     plt.tight_layout()
     plt.show()
 
     return joint_grid
 
-def paired_transition_density_heatmap(
-    pair_transition_dict,
-    grid_size=10,
-    mode="count",
-    title="Paired transition density by position",
-    cmap="viridis"
-):
+def paired_transition_density_heatmap(pair_transition_dict, grid_size=10, mode="count", cmap="viridis"):
     """
     Creates a heatmap showing paired-transition density at each behavioral position.
     
@@ -1193,13 +1110,10 @@ def paired_transition_density_heatmap(
 
         if not (0 <= x < grid_size and 0 <= y < grid_size):
             continue
-
         if mode == "count":
             value = sum(next_dict.values())
-
         elif mode == "unique_edges":
             value = len(next_dict)
-
         elif mode == "unique_pair_states":
             seen_pair_states_by_pos.setdefault((x, y), set()).add(current_pair)
             continue
@@ -1217,19 +1131,13 @@ def paired_transition_density_heatmap(
 
     plt.figure(figsize=(7, 6))
 
-    im = plt.imshow(
-        heatmap,
-        origin="lower",
-        cmap=cmap,
-        aspect="equal"
-    )
+    im = plt.imshow(heatmap, origin="lower", cmap=cmap, aspect="equal")
 
-    plt.title(title)
-    plt.xlabel("x position")
-    plt.ylabel("y position")
+    plt.xlabel("x position", fontsize=20, font='Arial')
+    plt.ylabel("y position", fontsize=20, font='Arial')
 
-    plt.xticks(range(grid_size))
-    plt.yticks(range(grid_size))
+    plt.xticks(range(grid_size), fontsize=20, font='Arial')
+    plt.yticks(range(grid_size), fontsize=20, font='Arial')
 
     cbar = plt.colorbar(im)
 
@@ -1241,7 +1149,7 @@ def paired_transition_density_heatmap(
         label = "Number of unique current paired states"
 
 
-    cbar.set_label(label)
+    cbar.set_label(label, fontsize=15, font='Arial')
 
     plt.tight_layout()
     plt.show()
@@ -2154,53 +2062,46 @@ def evaluate_error_history_on_fixed_route(route_sequence, b_transition_dict, neu
 
     return error_history
 
-def plot_error_histories_over_time(error_history_50, error_history_100, title="Route-choice error over same paired route", use_normalized=True, show_points=True):
+def plot_error_histories_over_time(error_history_50, error_history_55, error_history_75, error_history_95, error_history_100, use_normalized=True, show_points=True):
     def extract(error_history):
         frames = [item["frame"] for item in error_history]
 
         if use_normalized:
             errors = [item["normalized_error"] for item in error_history]
-            ylabel = "Normalized route-choice error"
+            ylabel = f"Normalized route-choice error (raw error / C)\n[C = (outgoing B transitions + outgoing N transitions + outgoing Pair transitions)]"
+
         else:
             errors = [item["raw_error"] for item in error_history]
             ylabel = "Raw route-choice error"
 
         return frames, errors, ylabel
 
+    min_attempt_values = (50, 55, 75, 95, 100)
+    plt.figure(figsize=(12, 7))
+    colors = plt.cm.copper(np.linspace(0, 1, len(min_attempt_values)))
+
     frames_50, errors_50, ylabel = extract(error_history_50)
+    frames_55, errors_55, _ = extract(error_history_55)
+    frames_75, errors_75, _ = extract(error_history_75)
+    frames_95, errors_95, _ = extract(error_history_95)
     frames_100, errors_100, _ = extract(error_history_100)
 
     plt.figure(figsize=(11, 5.5))
 
     marker = "o" if show_points else None
 
-    plt.plot(
-        frames_50,
-        errors_50,
-        marker=marker,
-        linewidth=1.8,
-        label="min_attempts = 50"
-    )
+    plt.plot(frames_50, errors_50, marker=marker, color=colors[0], linewidth=1.8, label="min_attempts = 50")
+    plt.plot(frames_55, errors_55, marker=marker, color=colors[1], linewidth=1.8, label="min_attempts = 55")
+    plt.plot(frames_75, errors_75, marker=marker, color=colors[2], linewidth=1.8, label="min_attempts = 75")
+    plt.plot(frames_95, errors_95, marker=marker, color=colors[3], linewidth=1.8, label="min_attempts = 95")
+    plt.plot(frames_100, errors_100, marker=marker, color=colors[4], linewidth=1.8, label="min_attempts = 100")
+    plt.axhline(y=0, linestyle="--", linewidth=1.0, alpha=0.6)
 
-    plt.plot(
-        frames_100,
-        errors_100,
-        marker=marker,
-        linewidth=1.8,
-        label="min_attempts = 100"
-    )
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1.0,
-        alpha=0.6
-    )
-
-    plt.xlabel("Frame along shared paired route")
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.legend()
+    plt.xlabel("Time bin along route", fontsize=15, font="Arial")
+    plt.ylabel(ylabel, fontsize=15, font="Arial")
+    plt.xticks(fontsize=13, font="Arial")
+    plt.yticks(fontsize=13, font="Arial")
+    plt.legend(fontsize=15)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -2210,6 +2111,24 @@ def plot_error_histories_over_time(error_history_50, error_history_100, title="R
     print("Median:", np.median(errors_50))
     print("Max:", np.max(errors_50))
     print("Min:", np.min(errors_50))
+
+    print("\nmin_attempts = 55")
+    print("Mean:", np.mean(errors_55))
+    print("Median:", np.median(errors_55))
+    print("Max:", np.max(errors_55))
+    print("Min:", np.min(errors_55))
+
+    print("\nmin_attempts = 75")
+    print("Mean:", np.mean(errors_75))
+    print("Median:", np.median(errors_75))
+    print("Max:", np.max(errors_75))
+    print("Min:", np.min(errors_75))
+
+    print("\nmin_attempts = 95")
+    print("Mean:", np.mean(errors_95))
+    print("Median:", np.median(errors_95))
+    print("Max:", np.max(errors_95))
+    print("Min:", np.min(errors_95))
 
     print("\nmin_attempts = 100")
     print("Mean:", np.mean(errors_100))
@@ -2309,12 +2228,74 @@ if __name__ == "__main__":
     print(f"[Log] Baseline model saved to {BASELINE_MODEL_PATH}")
     num_steps = 2
 
-    n_distrib_overlay = n_state_distribution_overlay_binned_barplots(top_k=100, bin_size=20, reduce="sum")
+    #n_distrib_overlay = n_state_distribution_overlay_binned_barplots(model, top_k=100, bin_size=20, reduce="percent")
     
     #n_state_histogram = n_state_distribution_histograms_individual()
-    #binned_overlay = n_state_histogram_overlay_binned(bin_size=100, reduce_to_same_bins=True, max_display_bin=1500)
+    #binned_overlay = n_state_histogram_overlay_binned(model,bin_size=100, reduce_to_same_bins=True, max_display_bin=1500)
     #summary = n_state_distribution_summary()
-    #b_state_bar_graphs = b_state_distribution_barplots()
+    #b_state_bar_graphs = b_state_distribution_barplots(model)
+    pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
+    pair_transition_dict_55, behavioral_transition_dict_55, neural_state_dict_55, all_visit_count_b_dict_55, all_visit_count_n_dict_55 = generate_dicts(model, min_visits=55)
+    pair_transition_dict_75, behavioral_transition_dict_75, neural_state_dict_75, all_visit_count_b_dict_75, all_visit_count_n_dict_75 = generate_dicts(model, min_visits=75)
+    pair_transition_dict_95, behavioral_transition_dict_95, neural_state_dict_95, all_visit_count_b_dict_95, all_visit_count_n_dict_95 = generate_dicts(model, min_visits=95)
+    pair_transition_dict_100, behavioral_transition_dict_100, neural_state_dict_100, all_visit_count_b_dict_100, all_visit_count_n_dict_100 = generate_dicts(model, min_visits=100)
+
+    shared_route_sequence = generate_supported_observed_pair_route(
+        pair_transition_dict_100,
+        neural_state_dict_100,
+        behavioral_transition_dict_100,
+        route_len=50,
+        seed=42,
+        min_pair_total=3,
+        min_pair_count=1,
+        min_n_total=3,
+        min_b_total=20
+    )
+    error_history_50 = evaluate_error_history_on_fixed_route(
+            shared_route_sequence,
+            behavioral_transition_dict_50,
+            neural_state_dict_50,
+            pair_transition_dict_50,
+            top_k=3,
+            apply_top3_filter=False
+        )
+
+    error_history_55 = evaluate_error_history_on_fixed_route(
+                shared_route_sequence,
+                behavioral_transition_dict_55,
+                neural_state_dict_55,
+                pair_transition_dict_55,
+                top_k=3,
+                apply_top3_filter=False
+            )
+
+    error_history_75 = evaluate_error_history_on_fixed_route(
+                shared_route_sequence,
+                behavioral_transition_dict_75,
+                neural_state_dict_75,
+                pair_transition_dict_75,
+                top_k=3,
+                apply_top3_filter=False
+            )
+    error_history_95 = evaluate_error_history_on_fixed_route(
+                shared_route_sequence,
+                behavioral_transition_dict_95,
+                neural_state_dict_95,
+                pair_transition_dict_95,
+                top_k=3,
+                apply_top3_filter=False
+            )
+    error_history_100 = evaluate_error_history_on_fixed_route(
+            shared_route_sequence,
+            behavioral_transition_dict_100,
+            neural_state_dict_100,
+            pair_transition_dict_100,
+            top_k=3,
+            apply_top3_filter=False
+        )
+
+    error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_55, error_history_75, error_history_95, error_history_100, use_normalized=True, show_points=True)
+
 
     #sweep_results = sweep_data_gen(model, step_size=5, min_attempts=50, max_attempts=101, sd=42)
     #print(sweep_results.keys())
@@ -2323,12 +2304,7 @@ if __name__ == "__main__":
     #pair_transition_dict_50, behavioral_transition_dict_50, neural_state_dict_50, all_visit_count_b_dict_50, all_visit_count_n_dict_50 = generate_dicts(model, min_visits=50)
     #pair_transition_dict_75, behavioral_transistion_dict_75, neural_state_dict_75, _, _ = generate_dicts(model, min_visits=75)
 
-    '''heatmap_pair_unique_edges_100 = paired_transition_density_heatmap(
-            pair_transition_dict_100,
-            grid_size=10,
-            mode="unique_edges",
-            title="Unique Paired Transition Density by Position, min_attempts=100"
-        )'''
+    #heatmap_pair_unique_edges_100 = paired_transition_density_heatmap(pair_transition_dict_100, grid_size=10, mode="unique_edges")
     
     '''shared_route_sequence = generate_supported_observed_pair_route(
         pair_transition_dict_100,
@@ -2368,9 +2344,9 @@ if __name__ == "__main__":
     top3_route_history_100 = save_top3_route_transitions(route100, behavioral_transition_dict_100, neural_state_dict_100, pair_transition_dict_100, top_k=3)
 
     np.save(os.path.join(SCRIPT_DIR, "top3_route_transitions_min100.npy"), np.array(top3_route_history_100, dtype=object), allow_pickle=True)
-    error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_100, title="Normalized Error Plot Over Same Route: min50 vs min100", use_normalized=True, show_points=True)'''
+    error_plot_50_100 = plot_error_histories_over_time(error_history_50, error_history_55, error_history_75, error_history_95, error_history_100, use_normalized=True, show_points=True)
 
-    '''summarize_fixed_route_coverage(
+    summarize_fixed_route_coverage(
         shared_route_sequence,
         behavioral_transition_dict_50,
         neural_state_dict_50,
@@ -2387,73 +2363,10 @@ if __name__ == "__main__":
     )
 
     summarize_error_history(error_history_50, label="min_attempts=50")
-    summarize_error_history(error_history_100, label="min_attempts=100")'''
+    summarize_error_history(error_history_100, label="min_attempts=100")
 
-    '''b_to_n_dict = build_b_to_n_map(pair_transition_dict_100)
+    b_to_n_dict = build_b_to_n_map(pair_transition_dict_100)
     nheat = n_state_distribution_heatmap(b_to_n_dict, agg="union")
     bheat = b_state_distribution_heatmap(all_visit_count_b_dict_100, agg="mean")
-    joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(normalize=True, b_agg="mean", n_agg="union")'''
-
-    '''
-
-    json_path = os.path.join(SCRIPT_DIR, "behavioral_neural_state_table.json")
-    out_ready = json_b_to_n_state(pair_transition_dict, 'count')
-    with open(json_path, "w") as f:
-        json.dump(out_ready, f, indent=2)
-
-    converted_prob_n_transition_dict = convert_count_to_probability(neural_state_dict)
-    json_prob_path = os.path.join(SCRIPT_DIR, "behavioral_to_neural_state_probabilities.json")
-    out_ready_prob = json_b_to_n_state(converted_prob_n_transition_dict, 'probability')
-    with open(json_prob_path, "w") as f:
-        json.dump(out_ready_prob, f, indent=2)
-    
-    one_step_b_trans, one_step_n_trans, one_step_pair_trans = one_step_probability(
-        behavioral_transition_dict, n_state_dict, pair_transition_dict
-    )
-
-    one_step_json_path = os.path.join(SCRIPT_DIR, "one_step_transition_probabilities.json")
-    one_step_pair_out_ready = json_b_to_n_state(one_step_pair_trans, 'probability')
-    with open(one_step_json_path, "w") as f:
-        json.dump(one_step_pair_out_ready, f, indent=2)
-
-    freq_b, freq_n, freq_pair, n_step_dict = n_step_sparse_probability(
-        num_steps=num_steps,
-        b_trans_dict=b_transition_dict,
-        n_state_dict=n_state_dict,
-        pair_dict=pair_transition_dict
-    )
-
-    n_step_json_path = os.path.join(SCRIPT_DIR, f"{num_steps}_step_transition_probabilities.json")
-    n_step_out_ready = json_b_to_n_state(n_step_dict, 'probability')
-    with open(n_step_json_path, "w") as f:
-        json.dump(n_step_out_ready, f, indent=2)
-    num_steps = 2
-    #test_deg = test_degeneracy(pair_transition_dict)
-    b_to_n_JSON, n_to_b_JSON = dynamic_degeneracy_probability(pair_transition_dict, num_steps=num_steps, gen_JSON=True)
-
-    b_to_n_dynamic_json_path = os.path.join(SCRIPT_DIR, f"b_to_n_dynamic_degeneracy_{num_steps}_step.json")
-    with open(b_to_n_dynamic_json_path, "w") as f:
-        json.dump(b_to_n_JSON, f, indent=2)
-
-    n_to_b_dynamic_json_path = os.path.join(SCRIPT_DIR, f"n_to_b_dynamic_degeneracy_{num_steps}_step.json")
-    with open(n_to_b_dynamic_json_path, "w") as f:
-        json.dump(n_to_b_JSON, f, indent=2)"""
-        
-    scores_b_to_n, scores_n_to_b = dynamic_degeneracy_score(pair_transition_dict)
-
-    print("\nDynamic degeneracy scores (b to n):")
-    print("Mean dynamic difference:", np.mean(scores_b_to_n))
-    print("Max difference:", np.max(scores_b_to_n))
-    print("num score comparisons:", len(scores_b_to_n))
-    print("mean dynamic difference:", np.mean(scores_b_to_n))
-    print("min dynamic difference:", np.min(scores_b_to_n))
-    print("max dynamic difference:", np.max(scores_b_to_n))
-
-    print("\nDynamic degeneracy scores (n to b):")
-    print("Mean dynamic difference:", np.mean(scores_n_to_b))
-    print("Max difference:", np.max(scores_n_to_b))
-    print("num score comparisons:", len(scores_n_to_b))
-    print("mean dynamic difference:", np.mean(scores_n_to_b))
-    print("min dynamic difference:", np.min(scores_n_to_b))
-    print("max dynamic difference:", np.max(scores_n_to_b))'''
+    joint_bn_distribution_heatmap = joint_b_n_dist_heatmap(all_visit_count_b_dict_100, b_to_n_dict,normalize=True, b_agg="mean", n_agg="union")'''
     

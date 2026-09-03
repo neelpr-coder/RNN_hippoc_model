@@ -913,25 +913,24 @@ def plot_manifold_panel_on_axis(
     return legend_handles
 
 
-def plot_error_panel_on_axis(
-    ax,
-    error_values,
-    min_visits,
-    y_limits=None
-):
+def plot_error_panel_on_axis(ax, error_values50, error_values55, error_values75, error_values95, error_values100, y_limits=None):
     """
-    Draws one  error-vs-time-frame panel below the manifold.
+    Draws one error-vs-time-frame panel below the manifold with all min_visits values plotted together.
     """
 
-    frames = np.arange(1, len(error_values) + 1)
+    frames = np.arange(1, len(error_values50) + 1)
+    error_handles = ["50", "55", "75", "95", "100"]
 
-    ax.plot(frames, error_values, color="black", linewidth=1.2, marker="o", markersize=2.4)
-    ax.set_title(f"Error vs Time Frame, min visits = {min_visits}", fontsize=10)
-    ax.set_xlabel("Frame", fontsize=9)
-    ax.set_ylabel("Error", fontsize=9)
-    ax.tick_params(axis="both", labelsize=8)
+    ax.plot(frames, error_values50, color="black", linewidth=1.2, marker="o", markersize=2.4, label="50")
+    ax.plot(frames, error_values55, color="gold", linewidth=1.2, marker="s", markersize=2.4, label="55")
+    ax.plot(frames, error_values75, color="green", linewidth=1.2, marker="d", markersize=2.4, label="75")
+    ax.plot(frames, error_values95, color="red", linewidth=1.2, marker="^", markersize=2.4, label="95")
+    ax.plot(frames, error_values100, color="purple", linewidth=1.2, marker="*", markersize=2.4, label="100")
+    ax.set_title(f"Error vs Time Frame, min visits = 50, 55, 75, 95, 100", fontsize=10)
+    ax.set_xlabel("Time Step", fontsize=15, font="Arial")
+    ax.set_ylabel("Error", fontsize=15, font="Arial")
+    ax.tick_params(axis="both", labelsize=14)
     ax.grid(True, alpha=0.25)
-
     if y_limits is not None:
         ax.set_ylim(y_limits)
 
@@ -939,7 +938,8 @@ def plot_error_panel_on_axis(
 def create_reduction_epoch_collage(
     dictionary_name,
     reduction_method,
-    min_visits_list=(50, 75, 100),
+    min_visits_list_manifolds=(50, 100),
+    min_visits_list_error_plot=(50, 55, 75, 95, 100),
     max_visits=151,
     sd=42,
     bin_size=0.5,
@@ -962,8 +962,10 @@ def create_reduction_epoch_collage(
 
     panel_data = []
     all_error_values = []
+    shared_error_handles = None
+    shared_error_labels = None
 
-    for min_visits in min_visits_list:
+    for min_visits in min_visits_list_manifolds:
         neural_state_dict, behavioral_state_dict, pair_transition_dict = load_cache(min_visits=min_visits, max_visits=max_visits, sd=sd, bin_size=bin_size)
         transition_dict = select_transition_dict(dictionary_name, neural_state_dict, behavioral_state_dict, pair_transition_dict)
         matrix, state_keys = convert_dict_to_matrix(transition_dict, dict_type=dict_type)
@@ -971,18 +973,24 @@ def create_reduction_epoch_collage(
         print(f"{display_name} {reduction_label}, min visits {min_visits}:vmatrix shape = {matrix.shape}")
 
         manifold = perform_manifold_learning(matrix, method=reduction_method, n_components=3, random_state=42)
+        all_errors = []
+        for min_visits_error in min_visits_list_error_plot:
+            n_error_dict, b_error_dict, pair_error_dict = load_cache(min_visits=min_visits_error, max_visits=max_visits, sd=sd, bin_size=bin_size)
 
-        error_history = figure2_generation.evaluate_error_history_on_fixed_route(
-            route_sequence=route_sequence,
-            b_transition_dict=behavioral_state_dict,
-            neural_state_dict=neural_state_dict,
-            pair_transition_dict=pair_transition_dict,
-            top_k=3,
-            apply_top3_filter=False
-        )
-
-        error_values = extract_error_values(error_history, error_key=error_key)
-        all_error_values.append(error_values)
+            error_history = figure2_generation.evaluate_error_history_on_fixed_route(
+                route_sequence=route_sequence,
+                b_transition_dict=b_error_dict,
+                neural_state_dict=n_error_dict,
+                pair_transition_dict=pair_error_dict,
+                top_k=3,
+                apply_top3_filter=False
+            )
+            all_errors.append((min_visits_error, error_history))
+        error_values_dict = {}
+        for min_visits_error, error_history in all_errors:
+            error_values = extract_error_values(error_history, error_key=error_key)
+            all_error_values.append(error_values)
+            error_values_dict[min_visits_error] = error_values
 
         panel_data.append({
             "min_visits": min_visits,
@@ -991,7 +999,7 @@ def create_reduction_epoch_collage(
             "pair_transition_dict": pair_transition_dict,
             "state_keys": state_keys,
             "manifold": manifold,
-            "error_values": error_values
+            "error_values_dict": error_values_dict
         })
 
     concatenated_errors = np.concatenate(all_error_values)
@@ -1006,7 +1014,7 @@ def create_reduction_epoch_collage(
 
     y_limits = (y_min - y_pad, y_max + y_pad)
     fig = plt.figure(figsize=(22, 10))
-    grid = fig.add_gridspec(2, 3, height_ratios=[4.7, 1.35], hspace=0.18, wspace=0.16)
+    grid = fig.add_gridspec(2, 2, height_ratios=[4.7, 1.35], hspace=0.18, wspace=0.16)
 
     shared_legend_handles = None
 
@@ -1033,10 +1041,13 @@ def create_reduction_epoch_collage(
 
         ax_error = fig.add_subplot(grid[1, col])
 
-        plot_error_panel_on_axis(ax=ax_error, error_values=data["error_values"], min_visits=min_visits, y_limits=y_limits)
+        plot_error_panel_on_axis(ax=ax_error, error_values50=data["error_values_dict"][50], error_values55=data["error_values_dict"][55], error_values75=data["error_values_dict"][75], error_values95=data["error_values_dict"][95], error_values100=data["error_values_dict"][100], y_limits=y_limits)
+        if shared_error_handles is None:
+            shared_error_handles, shared_error_labels = ax_error.get_legend_handles_labels()
+    error_legend = fig.legend(handles=shared_error_handles, labels=shared_error_labels, loc="center right", bbox_to_anchor=(.99, .20),title="Min visits", fontsize=10,title_fontsize=10, frameon=True)
 
     fig.suptitle(f"{display_name} dictionary trajectories across epochs — {reduction_label}", fontsize=20, y=0.96)
-    fig.legend(handles=shared_legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.925), ncol=6, fontsize=10, frameon=True)
+    fig.legend(handles=shared_legend_handles, loc="upper right", fontsize=7, frameon=True)
 
     plt.subplots_adjust(left=0.04, right=0.98, top=0.84, bottom=0.08)
 
@@ -1046,14 +1057,15 @@ def create_reduction_epoch_collage(
 
     if show:
         plt.show()
-    else:
-        plt.close(fig)
+    plt.close(fig)
+    
 
 
 def generate_all_dictionary_collages(
-    dictionary_names=("neural", "behavioral", "paired"),
+    dictionary_names=("behavioral", "paired"),
     reduction_methods=("tsne", "umap", "pca"),
-    min_visits_list=(50, 75, 100),
+    min_visits_list_manifolds=(50, 100),
+    min_visits_list_error_plot=(50, 55, 75, 95, 100),
     max_visits=151,
     sd=42,
     bin_size=0.5,
@@ -1077,13 +1089,14 @@ def generate_all_dictionary_collages(
             if save_dir is not None:
                 save_path = os.path.join(
                     save_dir,
-                    f"{dictionary_name}_{reduction_method}_epochs_50_75_100_clean_collage.png"
+                    f"{dictionary_name}_{reduction_method}_epochs_50_100_clean_collage.png"
                 )
 
             create_reduction_epoch_collage(
                 dictionary_name=dictionary_name,
                 reduction_method=reduction_method,
-                min_visits_list=min_visits_list,
+                min_visits_list_manifolds=min_visits_list_manifolds,
+                min_visits_list_error_plot=min_visits_list_error_plot,
                 max_visits=max_visits,
                 sd=sd,
                 bin_size=bin_size,
@@ -1096,13 +1109,27 @@ def generate_all_dictionary_collages(
 
 
 if __name__ == "__main__":
+    create_reduction_epoch_collage(
+    dictionary_name="behavioral",
+    reduction_method="pca",
+    min_visits_list_manifolds=(50, 100),
+    min_visits_list_error_plot=(50, 55, 75, 95, 100),
+    max_visits=151,
+    sd=42,
+    bin_size=0.3,
+    route_min_visits=100,
+    error_key="raw_error",
+    show=True
+)
+        
     RUN_COLLAGES = False
-    RUN_SINGLE_PLOTS_WITHOUT_INSETS = True
+    RUN_SINGLE_PLOTS_WITHOUT_INSETS = False
 
 
-    MIN_VISITS_LIST = (50, 75, 100)
-    REDUCTION_METHODS = ("tsne", "umap", "pca")
-    DICTIONARY_NAMES = ("neural", "behavioral", "paired")
+    MIN_VISITS_LIST_MANIFOLDS = (50, 100)
+    MIN_VISITS_LIST_ERROR_PLOT = (50, 55, 75, 95, 100)
+    REDUCTION_METHODS = ("umap", "pca")
+    DICTIONARY_NAMES = ("behavioral", "paired")
 
     MAX_VISITS = 151
     SD = 42
@@ -1119,7 +1146,8 @@ if __name__ == "__main__":
         generate_all_dictionary_collages(
             dictionary_names=DICTIONARY_NAMES,
             reduction_methods=REDUCTION_METHODS,
-            min_visits_list=MIN_VISITS_LIST,
+            min_visits_list_manifolds=MIN_VISITS_LIST_MANIFOLDS,
+            min_visits_list_error_plot=MIN_VISITS_LIST_ERROR_PLOT,
             max_visits=MAX_VISITS,
             sd=SD,
             bin_size=BIN_SIZE,
